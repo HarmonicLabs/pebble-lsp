@@ -1,3 +1,5 @@
+import { Parser } from '@harmoniclabs/pebble';
+
 import {
 	createConnection,
 	TextDocuments,
@@ -9,6 +11,7 @@ import {
 	TextDocumentSyncKind,
 	InitializeResult,
 	DocumentDiagnosticReportKind,
+	Range,
 	type DocumentDiagnosticReport
 } from 'vscode-languageserver/node';
 
@@ -64,8 +67,12 @@ documents.onDidChangeContent(change => {
 });
 
 async function validateTextDocument(textDocument: TextDocument): Promise<Diagnostic[]> {
-	console.log("Validating text document:", textDocument.uri);
 	const diagnostics: Diagnostic[] = [];
+	const document = documents.get(textDocument.uri);
+	if (document !== undefined) {
+		const [source, _] = Parser.parseFile(document.uri, document.getText());
+		console.log(source);
+	}
 	return diagnostics;
 }
 

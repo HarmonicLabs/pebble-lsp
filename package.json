@@ -1,7 +1,7 @@
 {
-	"name": "pluts-lsp",
-	"displayName": "Plu-TS Language Support",
-	"description": "Language support for Plu-TS including syntax highlighting and LSP",
+	"name": "pebble-lsp",
+	"displayName": "Pebble Language Support",
+	"description": "Language support for Pebble including syntax highlighting and LSP",
 	"version": "0.0.1",
 	"categories": [
 		"Programming Languages",
@@ -18,15 +18,76 @@
 	"contributes": {
 		"languages": [
 			{
-				"id": "typescript",
+				"id": "pebble",
 				"aliases": [
-					"TypeScript",
-					"typescript"
+					"Pebble",
+					"pebble"
 				],
 				"extensions": [
-					".ts"
+					".pebble"
 				],
 				"configuration": "./language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "pebble",
+				"scopeName": "source.pebble",
+				"path": "./syntaxes/pebble.tmLanguage.json",
+				"unbalancedBracketScopes": [
+					"keyword.operator.relational",
+					"storage.type.function.arrow",
+					"keyword.operator.bitwise.shift",
+					"meta.brace.angle",
+					"punctuation.definition.tag",
+					"keyword.operator.assignment.compound.bitwise.ts"
+				],
+				"tokenTypes": {
+					"meta.template.expression": "other",
+					"meta.template.expression string": "string",
+					"meta.template.expression comment": "comment",
+					"entity.name.type.instance.jsdoc": "other",
+					"entity.name.function.tagged-template": "other",
+					"meta.import string.quoted": "other",
+					"variable.other.jsdoc": "other"
+				}
+			}
+    	],
+    	"semanticTokenScopes": [
+			{
+				"language": "pebble",
+				"scopes": {
+					"property": [
+						"variable.other.property.ts"
+					],
+					"property.readonly": [
+						"variable.other.constant.property.ts"
+					],
+					"variable": [
+						"variable.other.readwrite.ts"
+					],
+					"variable.readonly": [
+						"variable.other.constant.object.ts"
+					],
+					"function": [
+						"entity.name.function.ts"
+					],
+					"namespace": [
+						"entity.name.type.module.ts"
+					],
+					"variable.defaultLibrary": [
+						"support.variable.ts"
+					],
+					"function.defaultLibrary": [
+						"support.function.ts"
+					]
+				}
+			}
+    	],
+		"snippets": [
+			{
+				"language": "pebble",
+				"path": "./snippets/pebble.code-snippets"
 			}
 		]
 	},
