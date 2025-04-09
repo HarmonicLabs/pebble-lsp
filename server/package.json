@@ -5,7 +5,7 @@
 		"node": "*"
 	},
 	"dependencies": {
-		"@harmoniclabs/pebble": "file:../packages/plu-ts",
+		"@harmoniclabs/pebble": "file:../packages/pebble",
 		"vscode-languageserver": "^9.0.1",
 		"vscode-languageserver-textdocument": "^1.0.11"
 	},
