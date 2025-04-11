@@ -1,10 +1,11 @@
 {
-	"name": "pluts-lsp-server",
+	"name": "pebble-lsp-server",
 	"version": "0.0.1",
 	"engines": {
 		"node": "*"
 	},
 	"dependencies": {
+		"@harmoniclabs/pebble": "file:../packages/pebble",
 		"vscode-languageserver": "^9.0.1",
 		"vscode-languageserver-textdocument": "^1.0.11"
 	},
