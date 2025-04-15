@@ -6,7 +6,6 @@
 // @ts-check
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
-import stylistic from '@stylistic/eslint-plugin';
 
 export default tseslint.config(
 	{
@@ -17,11 +16,7 @@ export default tseslint.config(
 	},
 	js.configs.recommended,
 	...tseslint.configs.recommended,
-	...tseslint.configs.stylistic,
 	{
-		plugins: {
-			'@stylistic': stylistic
-		},
 		rules: {
 			'curly': 'warn',
 			'@stylistic/semi': ['warn', 'always'],
