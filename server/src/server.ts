@@ -47,6 +47,9 @@ import { TypeImplementsStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statemen
 import { ExprStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ExprStmt';
 import { UsingStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/UsingStmt';
 import { ExportStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ExportStmt';
+import { FuncDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/FuncDecl';
+import { StructDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/StructDecl';
+import { SourceRange } from '@harmoniclabs/pebble/dist/ast/Source/SourceRange';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -156,18 +159,48 @@ connection.onDocumentHighlight((params: DocumentHighlightParams): DocumentHighli
 		const offset = document.offsetAt(params.position);
 		for (const statement of source.statements) {
 			if (offset >= statement.range.start && offset <= statement.range.end) {
-				const start = document.positionAt(statement.range.start);
-				const end = document.positionAt(statement.range.end);
-				results.push({
-					range: Range.create(start, end),
-					kind: DocumentHighlightKind.Read
-				});
+				if (statement instanceof FuncDecl) {
+					if (statement.expr.body instanceof BlockStmt) {
+						for (const s of statement.expr.body.stmts) {
+							let range = s.range;
+							if (s instanceof AssertStmt) {
+								range = s.condition.range;
+								range.start -= 7;
+								if (s.elseExpr) range.end = s.elseExpr.range.end;
+							}
+							if (s instanceof FailStmt) {
+								if (s.value) {
+									range = s.value.range;
+									range.start -= 5;
+								} else {
+									range.start = range.end - 5;
+								}
+							}
+							if (offset >= range.start && offset <= range.end) {
+								const start = document.positionAt(range.start);
+								const end = document.positionAt(range.end);
+								results.push({
+									range: Range.create(start, end),
+									kind: DocumentHighlightKind.Read
+								});
+							}
+						}
+					}
+				} else {
+					const start = document.positionAt(statement.range.start);
+					const end = document.positionAt(statement.range.end);
+					results.push({
+						range: Range.create(start, end),
+						kind: DocumentHighlightKind.Read
+					});
+				}
 			}
 		}
 	}
 	return results;
 });
 
+// TODO: We need to implement SignatureHelp instead, and provide more context
 function getStmtHoverText(statement: PebbleStmt): string {
 	if (statement instanceof IfStmt) return 'If statement';
 	if (statement instanceof VarStmt) return 'Var statement';
@@ -187,10 +220,12 @@ function getStmtHoverText(statement: PebbleStmt): string {
 	if (statement instanceof ImportStarStmt) return 'Import star statement';
 	if (statement instanceof ExportImportStmt) return 'Export import statement';
 	if (statement instanceof ImportStmt) return 'Import statement';
-	if (statement instanceof TypeImplementsStmt) return 'Type implements  statement';
+	if (statement instanceof TypeImplementsStmt) return 'Type implements statement';
 	if (statement instanceof ExprStmt) return 'Expression  statement';
 	if (statement instanceof UsingStmt) return 'Using  statement';
 	if (statement instanceof ExportStmt) return 'Export statement';
+	if (statement instanceof FuncDecl) return 'Function declaration';
+	if (statement instanceof StructDecl) return 'Struct declaration';
 	return '';
 }
 
@@ -199,18 +234,50 @@ connection.onHover((params: HoverParams): Hover | null => {
 	if (document !== undefined) {
 		const [source] = Parser.parseFile(document.uri, document.getText());
 		const offset = document.offsetAt(params.position);
+		console.log(source.statements);
 		for (const statement of source.statements) {
 			if (offset >= statement.range.start && offset <= statement.range.end) {
-				console.log(statement);
-				const start = document.positionAt(statement.range.start);
-				const end = document.positionAt(statement.range.end);
-				return {
-					contents: {
-						kind: 'markdown',
-						value: getStmtHoverText(statement)
-					},
-					range: Range.create(start, end)
-				};
+				if (statement instanceof FuncDecl) {
+					if (statement.expr.body instanceof BlockStmt) {
+						for (const s of statement.expr.body.stmts) {
+							let range = s.range;
+							if (s instanceof AssertStmt) {
+								range = s.condition.range;
+								range.start -= 7;
+								if (s.elseExpr) range.end = s.elseExpr.range.end;
+							}
+							if (s instanceof FailStmt) {
+								if (s.value) {
+									range = s.value.range;
+									range.start -= 5;
+								} else {
+									range.start = range.end - 5;
+								}
+							}
+							if (offset >= range.start && offset <= range.end) {
+								const start = document.positionAt(range.start);
+								const end = document.positionAt(range.end);
+								return {
+									contents: {
+										kind: 'markdown',
+										value: getStmtHoverText(s)
+									},
+									range: Range.create(start, end)
+								};
+							}
+						}
+					}
+				} else {
+					const start = document.positionAt(statement.range.start);
+					const end = document.positionAt(statement.range.end);
+					return {
+						contents: {
+							kind: 'markdown',
+							value: getStmtHoverText(statement)
+						},
+						range: Range.create(start, end)
+					};
+				}
 			}
 		}
 	}
