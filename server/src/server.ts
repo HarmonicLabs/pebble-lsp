@@ -1,4 +1,4 @@
-import { Parser } from '@harmoniclabs/pebble';
+import { Parser, AstCompiler } from '@harmoniclabs/pebble';
 
 import {
 	createConnection,
@@ -49,7 +49,6 @@ import { UsingStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/UsingS
 import { ExportStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ExportStmt';
 import { FuncDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/FuncDecl';
 import { StructDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/StructDecl';
-import { SourceRange } from '@harmoniclabs/pebble/dist/ast/Source/SourceRange';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -101,13 +100,25 @@ documents.onDidChangeContent(change => {
 });
 
 async function validateTextDocument(textDocument: TextDocument): Promise<Diagnostic[]> {
-	const diagnostics: Diagnostic[] = [];
-	const document = documents.get(textDocument.uri);
-	if (document !== undefined) {
-		// const [_, diagnostics] = Parser.parseFile(document.uri, document.getText());
-		// TODO: Do something with the diagnostics here
-	}
-	return diagnostics;
+	const documentPath = textDocument.uri.replace('file://', '');
+	const documentBasePath = documentPath.split('/').slice(0, -1).join('/');
+	const documentText = textDocument.getText();
+
+	const compiler = new AstCompiler({ entry: documentPath, root: documentBasePath } as any);
+	const diagnostics = await compiler.compileSource(documentPath, documentText);
+
+	return diagnostics.filter(d => d.range).map(d => ({
+		range: Range.create(textDocument.positionAt(d.range!!.start), textDocument.positionAt(d.range!!.end)),
+		code: d.code,
+		message: d.message,
+		relatedInformation: d.emitStack ? [{
+			location: {
+				uri: textDocument.uri,
+				range: Range.create(textDocument.positionAt(d.range!!.start), textDocument.positionAt(d.range!!.end))
+			},
+			message: `${d.message}\n${d.emitStack}`
+		}] : []
+	}));
 }
 
 connection.onDidChangeWatchedFiles(_change => {
