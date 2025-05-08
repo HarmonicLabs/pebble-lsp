@@ -52,8 +52,8 @@
 					"variable.other.jsdoc": "other"
 				}
 			}
-    	],
-    	"semanticTokenScopes": [
+		],
+		"semanticTokenScopes": [
 			{
 				"language": "pebble",
 				"scopes": {
@@ -83,7 +83,7 @@
 					]
 				}
 			}
-    	],
+		],
 		"snippets": [
 			{
 				"language": "pebble",
