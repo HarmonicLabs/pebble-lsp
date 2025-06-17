@@ -17,12 +17,17 @@ import {
 	DocumentHighlightParams,
 	Hover,
 	HoverParams,
+	Definition,
+	DefinitionParams,
 	type DocumentDiagnosticReport,
 } from 'vscode-languageserver/node';
 
 import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
+
+import { Source } from '@harmoniclabs/pebble/dist/ast/Source/Source';
+import { SourceRange } from '@harmoniclabs/pebble/dist/ast/Source/SourceRange';
 
 import { PebbleStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/PebbleStmt';
 import { ImportStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ImportStmt';
@@ -47,23 +52,21 @@ import { TypeImplementsStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statemen
 import { ExprStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ExprStmt';
 import { UsingStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/UsingStmt';
 import { ExportStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ExportStmt';
+import { Identifier } from '@harmoniclabs/pebble/dist/ast/nodes/common/Identifier';
 import { FuncDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/FuncDecl';
 import { StructDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/StructDecl';
+import { SimpleVarDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/VarDecl/SimpleVarDecl';
 
-// Create a connection for the server, using Node's IPC as a transport.
-// Also include all preview / proposed LSP features.
 const connection = createConnection(ProposedFeatures.all);
-
-// Create a simple text document manager.
 const documents = new TextDocuments(TextDocument);
 
 connection.onInitialize(() => {
 	const result: InitializeResult = {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
-			// Tell the client that this server supports code completion.
 			completionProvider: {
-				resolveProvider: true
+				resolveProvider: true,
+				triggerCharacters: ['.', ' ']
 			},
 			diagnosticProvider: {
 				interFileDependencies: false,
@@ -71,6 +74,7 @@ connection.onInitialize(() => {
 			},
 			documentHighlightProvider: true,
 			hoverProvider: true,
+			definitionProvider: true,
 		}
 	};
 	return result;
@@ -84,8 +88,6 @@ connection.languages.diagnostics.on(async (params) => {
 			items: await validateTextDocument(document)
 		} satisfies DocumentDiagnosticReport;
 	} else {
-		// We don't know the document. We can either try to read it from disk
-		// or we don't report problems for it.
 		return {
 			kind: DocumentDiagnosticReportKind.Full,
 			items: []
@@ -93,8 +95,6 @@ connection.languages.diagnostics.on(async (params) => {
 	}
 });
 
-// The content of a text document has changed. This event is emitted
-// when the text document first opened or when its content has changed.
 documents.onDidChangeContent(change => {
 	validateTextDocument(change.document);
 });
@@ -121,46 +121,31 @@ async function validateTextDocument(textDocument: TextDocument): Promise<Diagnos
 	}));
 }
 
-connection.onDidChangeWatchedFiles(_change => {
-	// Monitored files have change in VSCode
-	connection.console.log('We received a file change event');
+connection.onCompletion((_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
+	return [
+		{
+			label: 'TypeScript',
+			kind: CompletionItemKind.Text,
+			data: 1
+		},
+		{
+			label: 'JavaScript',
+			kind: CompletionItemKind.Text,
+			data: 2
+		}
+	];
 });
 
-// This handler provides the initial list of the completion items.
-connection.onCompletion(
-	(_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
-		// The pass parameter contains the position of the text document in
-		// which code complete got requested. For the example we ignore this
-		// info and always provide the same completion items.
-		return [
-			{
-				label: 'TypeScript',
-				kind: CompletionItemKind.Text,
-				data: 1
-			},
-			{
-				label: 'JavaScript',
-				kind: CompletionItemKind.Text,
-				data: 2
-			}
-		];
+connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
+	if (item.data === 1) {
+		item.detail = 'TypeScript details';
+		item.documentation = 'TypeScript documentation';
+	} else if (item.data === 2) {
+		item.detail = 'JavaScript details';
+		item.documentation = 'JavaScript documentation';
 	}
-);
-
-// This handler resolves additional information for the item selected in
-// the completion list.
-connection.onCompletionResolve(
-	(item: CompletionItem): CompletionItem => {
-		if (item.data === 1) {
-			item.detail = 'TypeScript details';
-			item.documentation = 'TypeScript documentation';
-		} else if (item.data === 2) {
-			item.detail = 'JavaScript details';
-			item.documentation = 'JavaScript documentation';
-		}
-		return item;
-	}
-);
+	return item;
+});
 
 connection.onDocumentHighlight((params: DocumentHighlightParams): DocumentHighlight[] => {
 	const results: DocumentHighlight[] = [];
@@ -295,9 +280,210 @@ connection.onHover((params: HoverParams): Hover | null => {
 	return null;
 });
 
-// Make the text document manager listen on the connection
-// for open, change and close text document events
+connection.onDefinition((params: DefinitionParams): Definition | null => {
+	const document = documents.get(params.textDocument.uri);
+	if (!document) return null;
+	
+	try {
+		const [source] = Parser.parseFile(document.uri, document.getText());
+		const offset = document.offsetAt(params.position);
+		
+		const identifierInfo = findIdentifierInSource(source, offset);
+		if (!identifierInfo) return null;
+		
+		const definition = findDefinition(source.statements, identifierInfo.identifier);
+		if (!definition) return null;
+		
+		const start = document.positionAt(definition.start);
+		const end = document.positionAt(definition.end);
+		
+		return {
+			uri: document.uri,
+			range: Range.create(start, end)
+		};
+	} catch (error) {
+		console.error('Error in onDefinition:', error);
+		return null;
+	}
+});
+
+interface IdentifierInfo {
+	identifier: Identifier;
+	context: 'variable' | 'function' | 'property' | 'parameter';
+}
+
+function findIdentifierInSource(source: Source, offset: number): IdentifierInfo | null {
+	for (const statement of source.statements) {
+		if (offset >= statement.range.start && offset <= statement.range.end) {
+			const result = findIdentifierInStatement(statement, offset);
+			if (result) return result;
+		}
+	}
+	return null;
+}
+
+function findIdentifierInStatement(statement: PebbleStmt, offset: number): IdentifierInfo | null {
+	if (statement instanceof FuncDecl) {
+		if (statement.expr.name && 
+			offset >= statement.expr.name.range.start && 
+			offset <= statement.expr.name.range.end) {
+			return { identifier: statement.expr.name, context: 'function' };
+		}
+		
+		for (const param of statement.expr.signature.params) {
+			if (param instanceof SimpleVarDecl && param.name && 
+				offset >= param.name.range.start && 
+				offset <= param.name.range.end) {
+				return { identifier: param.name, context: 'parameter' };
+			}
+		}
+		
+		if (statement.expr.body instanceof BlockStmt) {
+			for (const stmt of statement.expr.body.stmts) {
+				const result = findIdentifierInStatement(stmt, offset);
+				if (result) return result;
+			}
+		}
+	}
+	
+	if (statement instanceof VarStmt) {
+		for (const decl of statement.declarations) {
+			if (decl instanceof SimpleVarDecl && decl.name && 
+				offset >= decl.name.range.start && 
+				offset <= decl.name.range.end) {
+				return { identifier: decl.name, context: 'variable' };
+			}
+			if (decl instanceof SimpleVarDecl && decl.initExpr) {
+				const result = findIdentifierInExpression(decl.initExpr, offset);
+				if (result) return result;
+			}
+		}
+	}
+	
+	if (statement instanceof StructDecl) {
+		if (statement.name && 
+			offset >= statement.name.range.start && 
+			offset <= statement.name.range.end) {
+			return { identifier: statement.name, context: 'function' };
+		}
+	}
+	
+	if (statement instanceof ExprStmt) {
+		return findIdentifierInExpression(statement.expr, offset);
+	}
+	
+	if ((statement as any).assignedExpr) {
+		const result = findIdentifierInExpression((statement as any).assignedExpr, offset);
+		if (result) return result;
+	}
+	
+	if (statement instanceof AssertStmt && statement.condition) {
+		return findIdentifierInExpression(statement.condition, offset);
+	}
+	
+	if (statement instanceof FailStmt && statement.value) {
+		return findIdentifierInExpression(statement.value, offset);
+	}
+	
+	if (statement instanceof ReturnStmt && statement.value) {
+		return findIdentifierInExpression(statement.value, offset);
+	}
+	
+	return null;
+}
+
+function findIdentifierInExpression(expr: any, offset: number): IdentifierInfo | null {
+	if (!expr || offset < expr.range.start || offset > expr.range.end) {
+		return null;
+	}
+	
+	if (expr instanceof Identifier) {
+		return { identifier: expr, context: 'variable' };
+	}
+	
+	if (expr.prop && expr.object) {
+		if (offset >= expr.prop.range.start && offset <= expr.prop.range.end) {
+			return { identifier: expr.prop, context: 'property' };
+		}
+		return findIdentifierInExpression(expr.object, offset);
+	}
+	
+	if (expr.funcExpr) {
+		const funcResult = findIdentifierInExpression(expr.funcExpr, offset);
+		if (funcResult) return funcResult;
+		if (expr.args) {
+			for (const arg of expr.args) {
+				const result = findIdentifierInExpression(arg, offset);
+				if (result) return result;
+			}
+		}
+	}
+	
+	if (expr.left && expr.right) {
+		const leftResult = findIdentifierInExpression(expr.left, offset);
+		if (leftResult) return leftResult;
+		
+		const rightResult = findIdentifierInExpression(expr.right, offset);
+		if (rightResult) return rightResult;
+	}
+	
+	if (expr.object && expr.index) {
+		const objResult = findIdentifierInExpression(expr.object, offset);
+		if (objResult) return objResult;
+		
+		const indexResult = findIdentifierInExpression(expr.index, offset);
+		if (indexResult) return indexResult;
+	}
+	
+	return null;
+}
+
+function findDefinition(statements: PebbleStmt[], identifier: Identifier): SourceRange | null {
+	const targetName = identifier.text;
+	if (!targetName) return null;
+	
+	for (const statement of statements) {
+		if (statement instanceof FuncDecl && 
+			statement.expr.name && 
+			statement.expr.name.text === targetName) {
+			return statement.expr.name.range;
+		}
+		
+		if (statement instanceof StructDecl && 
+			statement.name && 
+			statement.name.text === targetName) {
+			return statement.name.range;
+		}
+		
+		if (statement instanceof VarStmt) {
+			for (const decl of statement.declarations) {
+				if (decl instanceof SimpleVarDecl && decl.name && decl.name.text === targetName) {
+					return decl.name.range;
+				}
+			}
+		}
+		
+		if (statement instanceof ImportStmt) {
+			for (const member of statement.members) {
+				if (member.identifier && member.identifier.text === targetName) {
+					return member.identifier.range;
+				}
+				if (member.asIdentifier && member.asIdentifier.text === targetName) {
+					return member.asIdentifier.range;
+				}
+			}
+		}
+
+		if (statement instanceof FuncDecl) {
+			if (statement.expr.body instanceof BlockStmt) {
+				return findDefinition(statement.expr.body.stmts, identifier);
+			}
+		}
+	}
+	
+	return null;
+}
+
 documents.listen(connection);
 
-// Listen on the connection
 connection.listen();

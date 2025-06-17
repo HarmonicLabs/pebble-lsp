@@ -31,7 +31,7 @@ function main({ tx, purpose }: ScriptContext)
     } = purpose;
 
     let sumLove = 0;
-
+    
     assert tx.outputs.length() === 1 else "only one output allowed";
     assert sumLove >= 1000_000_000;
 
@@ -41,13 +41,16 @@ function main({ tx, purpose }: ScriptContext)
     for (let i = 0; i < 10; i++) {
         a += 1;
     }
-
     match (purpose) {
         Spending { utxoRef, maybeDatum: Just{ value: datum as MyDatum } } => {}
         Minting { } => {}
         Certify { } => {}
         _ => {}
     }
+
+    const test = 1;
+
+    assert test === 1;
 
     trace a;
 
