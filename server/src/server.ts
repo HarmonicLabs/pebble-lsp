@@ -19,6 +19,7 @@ import {
 	HoverParams,
 	Definition,
 	DefinitionParams,
+	InsertTextFormat,
 	type DocumentDiagnosticReport,
 } from 'vscode-languageserver/node';
 
@@ -121,29 +122,35 @@ async function validateTextDocument(textDocument: TextDocument): Promise<Diagnos
 	}));
 }
 
-connection.onCompletion((_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
-	return [
-		{
-			label: 'TypeScript',
-			kind: CompletionItemKind.Text,
-			data: 1
-		},
-		{
-			label: 'JavaScript',
-			kind: CompletionItemKind.Text,
-			data: 2
-		}
-	];
+connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] => {
+	const document = documents.get(params.textDocument.uri);
+	if (!document) return [];
+
+	try {
+		const [source] = Parser.parseFile(document.uri, document.getText());
+		const offset = document.offsetAt(params.position);
+		const text = document.getText();
+		const position = params.position;
+		
+		// Get the current line and character position
+		const lineText = text.split('\n')[position.line] || '';
+		const beforeCursor = lineText.substring(0, position.character);
+		const wordMatch = beforeCursor.match(/\b(\w*)$/);
+		const currentWord = wordMatch ? wordMatch[1] : '';
+		
+		// Check if we're in a specific context
+		const context = getCompletionContext(source, offset, beforeCursor);
+		
+		return getCompletionItems(context, currentWord);
+	} catch (error) {
+		console.error('Error in onCompletion:', error);
+		return getDefaultCompletionItems();
+	}
 });
 
 connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
-	if (item.data === 1) {
-		item.detail = 'TypeScript details';
-		item.documentation = 'TypeScript documentation';
-	} else if (item.data === 2) {
-		item.detail = 'JavaScript details';
-		item.documentation = 'JavaScript documentation';
-	}
+	// Enhanced documentation can be added here based on the item
+	// For now, return the item as is since we already provide details
 	return item;
 });
 
@@ -482,6 +489,432 @@ function findDefinition(statements: PebbleStmt[], identifier: Identifier): Sourc
 	}
 	
 	return null;
+}
+
+interface CompletionContext {
+	type: 'statement' | 'expression' | 'type' | 'import' | 'property' | 'parameter' | 'default';
+	parentStatement?: PebbleStmt;
+	availableIdentifiers?: string[];
+}
+
+function getCompletionContext(source: Source, offset: number, beforeCursor: string): CompletionContext {
+	// Check if we're at the start of a line or after whitespace - likely a statement
+	if (/^\s*\w*$/.test(beforeCursor)) {
+		return {
+			type: 'statement',
+			availableIdentifiers: collectAvailableIdentifiers(source, offset)
+		};
+	}
+	
+	// Check if we're in an import statement
+	if (beforeCursor.includes('import') && !beforeCursor.includes(';')) {
+		return {
+			type: 'import',
+			availableIdentifiers: []
+		};
+	}
+	
+	// Check if we're after a dot - property access
+	if (beforeCursor.endsWith('.')) {
+		return {
+			type: 'property',
+			availableIdentifiers: collectAvailableIdentifiers(source, offset)
+		};
+	}
+	
+	// Check if we're in a type context (after : or <)
+	if (/:\s*\w*$|<\w*$/.test(beforeCursor)) {
+		return {
+			type: 'type',
+			availableIdentifiers: collectAvailableIdentifiers(source, offset)
+		};
+	}
+	
+	// Find the containing statement for more context
+	const containingStatement = findContainingStatement(source.statements, offset);
+	
+	return {
+		type: 'expression',
+		parentStatement: containingStatement,
+		availableIdentifiers: collectAvailableIdentifiers(source, offset)
+	};
+}
+
+function findContainingStatement(statements: PebbleStmt[], offset: number): PebbleStmt | undefined {
+	for (const statement of statements) {
+		if (offset >= statement.range.start && offset <= statement.range.end) {
+			if (statement instanceof FuncDecl && statement.expr.body instanceof BlockStmt) {
+				const nestedResult = findContainingStatement(statement.expr.body.stmts, offset);
+				return nestedResult || statement;
+			}
+			return statement;
+		}
+	}
+	return undefined;
+}
+
+function collectAvailableIdentifiers(source: Source, offset: number): string[] {
+	const identifiers: string[] = [];
+	
+	function collectFromStatements(statements: PebbleStmt[], currentOffset: number) {
+		for (const statement of statements) {
+			// Only include identifiers that are declared before the current position
+			if (statement.range.start >= currentOffset) continue;
+			
+			if (statement instanceof FuncDecl && statement.expr.name) {
+				identifiers.push(statement.expr.name.text);
+			}
+			
+			if (statement instanceof StructDecl && statement.name) {
+				identifiers.push(statement.name.text);
+			}
+			
+			if (statement instanceof VarStmt) {
+				for (const decl of statement.declarations) {
+					if (decl instanceof SimpleVarDecl && decl.name) {
+						identifiers.push(decl.name.text);
+					}
+				}
+			}
+			
+			if (statement instanceof ImportStmt) {
+				for (const member of statement.members) {
+					if (member.identifier) {
+						identifiers.push(member.identifier.text);
+					}
+					if (member.asIdentifier) {
+						identifiers.push(member.asIdentifier.text);
+					}
+				}
+			}
+			
+			// Recursively collect from nested blocks
+			if (statement instanceof FuncDecl && statement.expr.body instanceof BlockStmt) {
+				collectFromStatements(statement.expr.body.stmts, currentOffset);
+				
+				// Add function parameters
+				for (const param of statement.expr.signature.params) {
+					if (param instanceof SimpleVarDecl && param.name) {
+						identifiers.push(param.name.text);
+					}
+				}
+			}
+		}
+	}
+	
+	collectFromStatements(source.statements, offset);
+	return [...new Set(identifiers)]; // Remove duplicates
+}
+
+function getCompletionItems(context: CompletionContext, currentWord: string): CompletionItem[] {
+	const items: CompletionItem[] = [];
+	
+	switch (context.type) {
+		case 'statement':
+			items.push(...getStatementCompletions());
+			items.push(...getIdentifierCompletions(context.availableIdentifiers || []));
+			break;
+			
+		case 'expression':
+			items.push(...getExpressionCompletions());
+			items.push(...getIdentifierCompletions(context.availableIdentifiers || []));
+			items.push(...getBuiltinCompletions());
+			break;
+			
+		case 'type':
+			items.push(...getTypeCompletions());
+			items.push(...getIdentifierCompletions(context.availableIdentifiers || []));
+			break;
+			
+		case 'import':
+			items.push(...getImportCompletions());
+			break;
+			
+		case 'property':
+			// This would need more sophisticated analysis to determine the object type
+			items.push(...getCommonPropertyCompletions());
+			break;
+			
+		default:
+			items.push(...getDefaultCompletionItems());
+			break;
+	}
+	
+	// Filter items based on current word
+	if (currentWord) {
+		return items.filter(item => 
+			item.label.toLowerCase().startsWith(currentWord.toLowerCase())
+		);
+	}
+	
+	return items;
+}
+
+function getStatementCompletions(): CompletionItem[] {
+	return [
+		{
+			label: 'if',
+			kind: CompletionItemKind.Keyword,
+			detail: 'If statement',
+			documentation: 'Conditional statement',
+			insertText: 'if (${1:condition}) {\n\t${2}\n}',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'for',
+			kind: CompletionItemKind.Keyword,
+			detail: 'For loop',
+			documentation: 'For loop statement',
+			insertText: 'for (${1:init}; ${2:condition}; ${3:increment}) {\n\t${4}\n}',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'while',
+			kind: CompletionItemKind.Keyword,
+			detail: 'While loop',
+			documentation: 'While loop statement',
+			insertText: 'while (${1:condition}) {\n\t${2}\n}',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'var',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Variable declaration',
+			documentation: 'Declare a variable',
+			insertText: 'var ${1:name}: ${2:type} = ${3:value};',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'func',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Function declaration',
+			documentation: 'Declare a function',
+			insertText: 'func ${1:name}(${2:params}): ${3:returnType} {\n\t${4}\n}',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'struct',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Struct declaration',
+			documentation: 'Declare a struct',
+			insertText: 'struct ${1:name} {\n\t${2}\n}',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'return',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Return statement',
+			documentation: 'Return a value from function',
+			insertText: 'return ${1:value};',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'break',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Break statement',
+			documentation: 'Break out of loop'
+		},
+		{
+			label: 'continue',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Continue statement',
+			documentation: 'Continue to next iteration'
+		},
+		{
+			label: 'import',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Import statement',
+			documentation: 'Import from module',
+			insertText: 'import { ${1:members} } from "${2:module}";',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'export',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Export statement',
+			documentation: 'Export declaration'
+		},
+		{
+			label: 'match',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Match statement',
+			documentation: 'Pattern matching statement',
+			insertText: 'match ${1:value} {\n\t${2:pattern} => ${3:result}\n}',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'assert',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Assert statement',
+			documentation: 'Assert condition',
+			insertText: 'assert(${1:condition});',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'fail',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Fail statement',
+			documentation: 'Fail with message',
+			insertText: 'fail(${1:message});',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'test',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Test statement',
+			documentation: 'Test declaration',
+			insertText: 'test "${1:description}" {\n\t${2}\n}',
+			insertTextFormat: InsertTextFormat.Snippet
+		}
+	];
+}
+
+function getExpressionCompletions(): CompletionItem[] {
+	return [
+		{
+			label: 'true',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Boolean literal',
+			documentation: 'Boolean true value'
+		},
+		{
+			label: 'false',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Boolean literal',
+			documentation: 'Boolean false value'
+		},
+		{
+			label: 'null',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Null literal',
+			documentation: 'Null value'
+		}
+	];
+}
+
+function getTypeCompletions(): CompletionItem[] {
+	return [
+		{
+			label: 'Int',
+			kind: CompletionItemKind.TypeParameter,
+			detail: 'Integer type',
+			documentation: 'Integer number type'
+		},
+		{
+			label: 'Bool',
+			kind: CompletionItemKind.TypeParameter,
+			detail: 'Boolean type',
+			documentation: 'Boolean true/false type'
+		},
+		{
+			label: 'String',
+			kind: CompletionItemKind.TypeParameter,
+			detail: 'String type',
+			documentation: 'Text string type'
+		},
+		{
+			label: 'ByteString',
+			kind: CompletionItemKind.TypeParameter,
+			detail: 'ByteString type',
+			documentation: 'Byte string type'
+		},
+		{
+			label: 'Data',
+			kind: CompletionItemKind.TypeParameter,
+			detail: 'Data type',
+			documentation: 'Generic data type'
+		},
+		{
+			label: 'List',
+			kind: CompletionItemKind.TypeParameter,
+			detail: 'List type',
+			documentation: 'List collection type',
+			insertText: 'List<${1:T}>',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'Map',
+			kind: CompletionItemKind.TypeParameter,
+			detail: 'Map type',
+			documentation: 'Map/dictionary type',
+			insertText: 'Map<${1:K}, ${2:V}>',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'Option',
+			kind: CompletionItemKind.TypeParameter,
+			detail: 'Option type',
+			documentation: 'Optional value type',
+			insertText: 'Option<${1:T}>',
+			insertTextFormat: InsertTextFormat.Snippet
+		}
+	];
+}
+
+function getImportCompletions(): CompletionItem[] {
+	return [
+		{
+			label: 'from',
+			kind: CompletionItemKind.Keyword,
+			detail: 'Import from',
+			documentation: 'Import from module'
+		}
+	];
+}
+
+function getCommonPropertyCompletions(): CompletionItem[] {
+	return [
+		{
+			label: 'length',
+			kind: CompletionItemKind.Property,
+			detail: 'Length property',
+			documentation: 'Get length of collection'
+		},
+		{
+			label: 'isEmpty',
+			kind: CompletionItemKind.Property,
+			detail: 'isEmpty property',
+			documentation: 'Check if collection is empty'
+		}
+	];
+}
+
+function getBuiltinCompletions(): CompletionItem[] {
+	return [
+		{
+			label: 'print',
+			kind: CompletionItemKind.Function,
+			detail: 'print(value)',
+			documentation: 'Print value to output',
+			insertText: 'print(${1:value})',
+			insertTextFormat: InsertTextFormat.Snippet
+		},
+		{
+			label: 'trace',
+			kind: CompletionItemKind.Function,
+			detail: 'trace(message, value)',
+			documentation: 'Trace value with message',
+			insertText: 'trace(${1:message}, ${2:value})',
+			insertTextFormat: InsertTextFormat.Snippet
+		}
+	];
+}
+
+function getIdentifierCompletions(identifiers: string[]): CompletionItem[] {
+	return identifiers.map(id => ({
+		label: id,
+		kind: CompletionItemKind.Variable,
+		detail: 'Identifier',
+		documentation: `Available identifier: ${id}`
+	}));
+}
+
+function getDefaultCompletionItems(): CompletionItem[] {
+	return [
+		...getStatementCompletions(),
+		...getExpressionCompletions(),
+		...getBuiltinCompletions()
+	];
 }
 
 documents.listen(connection);
