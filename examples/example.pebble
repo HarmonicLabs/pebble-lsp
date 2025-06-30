@@ -38,9 +38,11 @@ function main({ tx, purpose }: ScriptContext)
     let a = 0;
     let b = 1;
     let c = 2;
+    
     for (let i = 0; i < 10; i++) {
         a += 1;
     }
+
     match (purpose) {
         Spending { utxoRef, maybeDatum: Just{ value: datum as MyDatum } } => {}
         Minting { } => {}
