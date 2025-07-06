@@ -2,7 +2,9 @@
 	"name": "pebble-lsp",
 	"displayName": "Pebble Language Support",
 	"description": "Language support for Pebble including syntax highlighting and LSP",
+	"publisher": "HarmonicLabs",
 	"version": "0.0.1",
+	"repository": "https://github.com/HarmonicLabs/pebble-lsp",
 	"categories": [
 		"Programming Languages",
 		"Snippets",
