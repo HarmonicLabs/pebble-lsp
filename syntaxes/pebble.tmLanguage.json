@@ -74,6 +74,9 @@
 					"include": "#enum-declaration"
 				},
 				{
+					"include": "#struct-declaration"
+				},
+				{
 					"include": "#namespace-declaration"
 				},
 				{
@@ -157,6 +160,10 @@
 				{
 					"name": "keyword.other.debugger.ts",
 					"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(debugger)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
+				},
+				{
+					"name": "keyword.control.pebble.ts",
+					"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(assert|trace|fail|match)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
 				}
 			]
 		},
@@ -1794,6 +1801,116 @@
 				},
 				{
 					"include": "#class-or-interface-body"
+				}
+			]
+		},
+		"struct-declaration": {
+			"name": "meta.struct.ts",
+			"begin": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(?:(\\bexport)\\s+)?(?:(\\bdeclare)\\s+)?\\b(struct)\\b(?=\\s+|/[/*])",
+			"beginCaptures": {
+				"1": {
+					"name": "keyword.control.export.ts"
+				},
+				"2": {
+					"name": "storage.modifier.ts"
+				},
+				"3": {
+					"name": "storage.type.struct.ts"
+				}
+			},
+			"end": "(?<=\\})",
+			"patterns": [
+				{
+					"include": "#comment"
+				},
+				{
+					"match": "[_$[:alpha:]][_$[:alnum:]]*",
+					"captures": {
+						"0": {
+							"name": "entity.name.type.struct.ts"
+						}
+					}
+				},
+				{
+					"include": "#type-parameters"
+				},
+				{
+					"include": "#struct-body"
+				}
+			]
+		},
+		"struct-body": {
+			"name": "meta.struct.body.ts",
+			"begin": "\\{",
+			"beginCaptures": {
+				"0": {
+					"name": "punctuation.definition.block.ts"
+				}
+			},
+			"end": "\\}",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.definition.block.ts"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comment"
+				},
+				{
+					"include": "#struct-field"
+				},
+				{
+					"include": "#struct-variant"
+				}
+			]
+		},
+		"struct-field": {
+			"name": "meta.struct.field.ts",
+			"begin": "(?=\\s*[_$[:alpha:]][_$[:alnum:]]*\\s*:)",
+			"end": "(?=[,}]|$)",
+			"patterns": [
+				{
+					"match": "([_$[:alpha:]][_$[:alnum:]]*)\\s*(:)",
+					"captures": {
+						"1": {
+							"name": "variable.other.property.ts"
+						},
+						"2": {
+							"name": "punctuation.separator.key-value.ts"
+						}
+					}
+				},
+				{
+					"include": "#type-annotation"
+				},
+				{
+					"include": "#comment"
+				},
+				{
+					"match": ",",
+					"name": "punctuation.separator.comma.ts"
+				}
+			]
+		},
+		"struct-variant": {
+			"name": "meta.struct.variant.ts",
+			"begin": "(?=\\s*[_$[:alpha:]][_$[:alnum:]]*\\s*\\{)",
+			"end": "(?<=\\})",
+			"patterns": [
+				{
+					"match": "([_$[:alpha:]][_$[:alnum:]]*)",
+					"captures": {
+						"1": {
+							"name": "entity.name.type.variant.ts"
+						}
+					}
+				},
+				{
+					"include": "#struct-body"
+				},
+				{
+					"include": "#comment"
 				}
 			]
 		},
@@ -4196,7 +4313,7 @@
 		},
 		"type-primitive": {
 			"name": "support.type.primitive.ts",
-			"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(string|number|bigint|boolean|symbol|any|void|never|unknown)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
+			"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(string|number|bigint|boolean|symbol|any|void|never|unknown|int)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
 		},
 		"type-builtin-literals": {
 			"name": "support.type.builtin.ts",

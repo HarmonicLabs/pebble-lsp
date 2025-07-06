@@ -42,10 +42,10 @@ function main({ tx, purpose }: ScriptContext)
         a += 1;
     }
     match (purpose) {
-        Spending { utxoRef, maybeDatum: Just{ value: datum as MyDatum } } => {}
-        Minting { } => {}
-        Certify { } => {}
-        _ => {}
+        Spending { utxoRef, maybeDatum: Just{ value: datum as MyDatum } }: {}
+        Minting { }: {}
+        Certify { }: {}
+        _: {}
     }
 
     const test = 1;
