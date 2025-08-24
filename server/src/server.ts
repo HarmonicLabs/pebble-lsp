@@ -1,4 +1,4 @@
-import { Parser, AstCompiler } from '@harmoniclabs/pebble';
+import { AstCompiler } from '@harmoniclabs/pebble';
 
 import {
 	createConnection,
@@ -7,14 +7,13 @@ import {
 	Diagnostic,
 	ProposedFeatures,
 	CompletionItem,
-	CompletionItemKind,
 	TextDocumentPositionParams,
 	TextDocumentSyncKind,
 	InitializeResult,
 	DocumentDiagnosticReportKind,
 	DocumentHighlight,
-	DocumentHighlightKind,
 	DocumentHighlightParams,
+	DocumentHighlightKind,
 	Hover,
 	HoverParams,
 	Definition,
@@ -26,39 +25,445 @@ import {
 	TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import { Source } from '@harmoniclabs/pebble/dist/ast/Source/Source';
-import { SourceRange } from '@harmoniclabs/pebble/dist/ast/Source/SourceRange';
+import Parser from 'tree-sitter';
+const Pebble = require('tree-sitter-pebble');
 
-import { PebbleStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/PebbleStmt';
-import { ImportStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ImportStmt';
-import { VarStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/VarStmt';
-import { IfStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/IfStmt';
-import { ForStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ForStmt';
-import { ForOfStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ForOfStmt';
-import { WhileStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/WhileStmt';
-import { ReturnStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ReturnStmt';
-import { BlockStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/BlockStmt';
-import { BreakStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/BreakStmt';
-import { ContinueStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ContinueStmt';
-import { EmptyStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/EmptyStmt';
-import { FailStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/FailStmt';
-import { AssertStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/AssertStmt';
-import { TestStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/TestStmt';
-import { MatchStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/MatchStmt';
-import { ExportStarStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ExportStarStmt';
-import { ImportStarStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ImportStarStmt';
-import { ExportImportStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ExportImportStmt';
-import { TypeImplementsStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/TypeImplementsStmt';
-import { ExprStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ExprStmt';
-import { UsingStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/UsingStmt';
-import { ExportStmt } from '@harmoniclabs/pebble/dist/ast/nodes/statements/ExportStmt';
-import { Identifier } from '@harmoniclabs/pebble/dist/ast/nodes/common/Identifier';
-import { FuncDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/FuncDecl';
-import { StructDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/StructDecl';
-import { SimpleVarDecl } from '@harmoniclabs/pebble/dist/ast/nodes/statements/declarations/VarDecl/SimpleVarDecl';
+const parser = new Parser();
+parser.setLanguage(Pebble);
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
+
+// Helper functions for document highlighting
+function findNodeAtPosition(node: Parser.SyntaxNode, offset: number): Parser.SyntaxNode | null {
+	// Check if the offset is within this node's range
+	if (offset < node.startIndex || offset > node.endIndex) {
+		return null;
+	}
+	
+	// If this node has children, recursively search them
+	for (const child of node.children) {
+		const result = findNodeAtPosition(child, offset);
+		if (result) {
+			return result;
+		}
+	}
+	
+	// If no child contains the position, this node is the most specific one
+	return node;
+}
+
+function getIdentifierName(node: Parser.SyntaxNode, text: string): string | null {
+	// Check if the node is an identifier or contains an identifier
+	if (node.type === 'identifier') {
+		return text.slice(node.startIndex, node.endIndex);
+	}
+	
+	// Handle Pebble-specific node types that contain identifiers
+	const identifierContainingTypes = [
+		'variable_declaration',
+		'function_declaration', 
+		'parameter',
+		'let_declaration',
+		'const_declaration',
+		'struct_declaration',
+		'field_declaration',
+		'enum_variant',
+		'member_expression',
+		'call_expression'
+	];
+	
+	if (identifierContainingTypes.includes(node.type)) {
+		// Find the identifier child
+		for (const child of node.children) {
+			if (child.type === 'identifier') {
+				return text.slice(child.startIndex, child.endIndex);
+			}
+		}
+	}
+	
+	// Check if parent is an identifier (in case we're on part of an identifier)
+	if (node.parent && node.parent.type === 'identifier') {
+		return text.slice(node.parent.startIndex, node.parent.endIndex);
+	}
+	
+	// Walk up the tree to find identifier in parent nodes
+	let current = node.parent;
+	while (current) {
+		if (current.type === 'identifier') {
+			return text.slice(current.startIndex, current.endIndex);
+		}
+		// Look for identifier children in parent nodes
+		for (const child of current.children) {
+			if (child.type === 'identifier' && 
+				child.startIndex <= node.startIndex && 
+				child.endIndex >= node.endIndex) {
+				return text.slice(child.startIndex, child.endIndex);
+			}
+		}
+		current = current.parent;
+	}
+	
+	return null;
+}
+
+function findIdentifierOccurrences(
+	node: Parser.SyntaxNode, 
+	identifierName: string, 
+	text: string, 
+	document: TextDocument, 
+	highlights: DocumentHighlight[]
+): void {
+	// Check if this node is an identifier with the same name
+	if (node.type === 'identifier') {
+		const nodeText = text.slice(node.startIndex, node.endIndex);
+		if (nodeText === identifierName) {
+			const range = Range.create(
+				document.positionAt(node.startIndex),
+				document.positionAt(node.endIndex)
+			);
+			
+			// Use text highlighting for all occurrences
+			// TODO: Implement proper Read/Write distinction when type issues are resolved
+			const kind = DocumentHighlightKind.Text;
+			
+			highlights.push({ range, kind });
+		}
+	}
+	
+	// Recursively search all children
+	for (const child of node.children) {
+		findIdentifierOccurrences(child, identifierName, text, document, highlights);
+	}
+}
+
+// Helper function to generate hover information
+function generateHoverInfo(node: Parser.SyntaxNode, text: string, rootNode: Parser.SyntaxNode): string | null {
+	// Get the identifier name if this is an identifier node
+	const identifierName = getIdentifierName(node, text);
+	if (!identifierName) {
+		// Handle non-identifier nodes that might be interesting to hover over
+		return getNodeTypeInfo(node, text);
+	}
+	
+	// Find the declaration of this identifier
+	const declaration = findDeclaration(identifierName, rootNode, text);
+	if (declaration) {
+		return formatDeclarationInfo(declaration, text, identifierName);
+	}
+	
+	// Handle built-in types and keywords
+	const builtInInfo = getBuiltInInfo(identifierName);
+	if (builtInInfo) {
+		return builtInInfo;
+	}
+	
+	// If no declaration found, provide basic information
+	if (node.type === 'identifier') {
+		return `**${identifierName}**\n\n*Identifier* (no declaration found in current file)`;
+	}
+	
+	return null;
+}
+
+function getNodeTypeInfo(node: Parser.SyntaxNode, text: string): string | null {
+	const nodeText = text.slice(node.startIndex, node.endIndex).trim();
+	
+	switch (node.type) {
+		case 'string_literal':
+			return `**String Literal**\n\n\`\`\`pebble\n${nodeText}\n\`\`\`\n\nString value: ${nodeText}`;
+		case 'number_literal':
+		case 'integer_literal':
+			return `**Number Literal**\n\n\`\`\`pebble\n${nodeText}\n\`\`\`\n\nNumeric value: ${nodeText}`;
+		case 'boolean_literal':
+			return `**Boolean Literal**\n\n\`\`\`pebble\n${nodeText}\n\`\`\`\n\nBoolean value: ${nodeText}`;
+		case 'comment':
+			return `**Comment**\n\n\`\`\`pebble\n${nodeText}\n\`\`\``;
+		default:
+			return null;
+	}
+}
+
+// Find the declaration of an identifier
+function findDeclaration(identifierName: string, rootNode: Parser.SyntaxNode, text: string): Parser.SyntaxNode | null {
+	// First, try to find the most specific declaration (function, struct, or variable declarations)
+	const primaryDeclaration = findPrimaryDeclaration(identifierName, rootNode, text);
+	if (primaryDeclaration) return primaryDeclaration;
+	
+	// Fallback to general recursive search
+	return findDeclarationRecursive(identifierName, rootNode, text);
+}
+
+// Find primary declarations (functions, structs, top-level variables)
+function findPrimaryDeclaration(identifierName: string, node: Parser.SyntaxNode, text: string): Parser.SyntaxNode | null {
+	const primaryDeclarationTypes = [
+		'function_declaration',
+		'struct_declaration',
+		'const_declaration',
+		'let_declaration',
+		'variable_declaration'
+	];
+	
+	// Check direct children first for top-level declarations
+	for (const child of node.children) {
+		if (primaryDeclarationTypes.includes(child.type) && isDeclarationNode(child, identifierName, text)) {
+			return child;
+		}
+	}
+	
+	// Also check for parameter declarations and local scope declarations
+	const allDeclarationTypes = [
+		...primaryDeclarationTypes,
+		'parameter',
+		'field_declaration'
+	];
+	
+	// Recursively search for declarations
+	for (const child of node.children) {
+		if (allDeclarationTypes.includes(child.type) && isDeclarationNode(child, identifierName, text)) {
+			return child;
+		}
+		const result = findPrimaryDeclaration(identifierName, child, text);
+		if (result) return result;
+	}
+	
+	return null;
+}
+
+function findDeclarationRecursive(identifierName: string, node: Parser.SyntaxNode, text: string): Parser.SyntaxNode | null {
+	// Check if this node is a declaration for the identifier
+	if (isDeclarationNode(node, identifierName, text)) {
+		return node;
+	}
+	
+	// Recursively search children
+	for (const child of node.children) {
+		const result = findDeclarationRecursive(identifierName, child, text);
+		if (result) return result;
+	}
+	
+	return null;
+}
+
+function isDeclarationNode(node: Parser.SyntaxNode, identifierName: string, text: string): boolean {
+	const declarationTypes = [
+		'variable_declaration',
+		'function_declaration',
+		'let_declaration',
+		'const_declaration',
+		'struct_declaration',
+		'parameter',
+		'field_declaration'
+	];
+	
+	if (!declarationTypes.includes(node.type)) return false;
+	
+	// Find identifier child and check if it matches
+	for (const child of node.children) {
+		if (child.type === 'identifier') {
+			const childText = text.slice(child.startIndex, child.endIndex);
+			if (childText === identifierName) {
+				return true;
+			}
+		}
+	}
+	
+	return false;
+}
+
+function formatDeclarationInfo(declarationNode: Parser.SyntaxNode, text: string, identifierName: string): string {
+	const nodeText = text.slice(declarationNode.startIndex, declarationNode.endIndex);
+	
+	switch (declarationNode.type) {
+		case 'function_declaration':
+			return formatFunctionDeclaration(declarationNode, text, identifierName);
+		case 'variable_declaration':
+		case 'let_declaration':
+		case 'const_declaration':
+			return formatVariableDeclaration(declarationNode, text, identifierName);
+		case 'struct_declaration':
+			return formatStructDeclaration(declarationNode, text, identifierName);
+		case 'parameter':
+			return formatParameterDeclaration(declarationNode, text, identifierName);
+		case 'field_declaration':
+			return formatFieldDeclaration(declarationNode, text, identifierName);
+		default:
+			return `**${identifierName}**\n\n\`\`\`pebble\n${nodeText.trim()}\n\`\`\``;
+	}
+}
+
+function formatFunctionDeclaration(node: Parser.SyntaxNode, text: string, identifierName: string): string {
+	const nodeText = text.slice(node.startIndex, node.endIndex);
+	const lines = nodeText.split('\n');
+	const signature = lines[0].trim();
+	
+	// Extract parameters if possible
+	let paramInfo = '';
+	const parameterNodes = node.children.filter(child => child.type === 'parameter' || child.type === 'parameter_list');
+	if (parameterNodes.length > 0) {
+		const params = parameterNodes.map(param => {
+			const paramText = text.slice(param.startIndex, param.endIndex).trim();
+			return paramText;
+		}).join(', ');
+		paramInfo = `\n\n**Parameters:** ${params}`;
+	}
+	
+	return `**${identifierName}** *(function)*\n\n\`\`\`pebble\n${signature}\n\`\`\`${paramInfo}\n\n*Function declaration*`;
+}
+
+function formatVariableDeclaration(node: Parser.SyntaxNode, text: string, identifierName: string): string {
+	const nodeText = text.slice(node.startIndex, node.endIndex).trim();
+	const declarationType = node.type === 'const_declaration' ? 'constant' : 'variable';
+	
+	// Try to extract type information
+	let typeInfo = '';
+	const typeNodes = node.children.filter(child => 
+		child.type === 'type_annotation' || 
+		child.type === 'type' ||
+		child.type.includes('type')
+	);
+	
+	if (typeNodes.length > 0) {
+		const typeText = typeNodes.map(typeNode => 
+			text.slice(typeNode.startIndex, typeNode.endIndex).trim()
+		).join(' ');
+		typeInfo = `\n\n**Type:** \`${typeText}\``;
+	}
+	
+	return `**${identifierName}** *(${declarationType})*\n\n\`\`\`pebble\n${nodeText}\n\`\`\`${typeInfo}`;
+}
+
+function formatStructDeclaration(node: Parser.SyntaxNode, text: string, identifierName: string): string {
+	const nodeText = text.slice(node.startIndex, node.endIndex);
+	const lines = nodeText.split('\n');
+	const signature = lines[0].trim();
+	
+	return `**${identifierName}** *(struct)*\n\n\`\`\`pebble\n${signature}\n\`\`\`\n\n*Struct declaration*`;
+}
+
+function formatParameterDeclaration(node: Parser.SyntaxNode, text: string, identifierName: string): string {
+	const nodeText = text.slice(node.startIndex, node.endIndex).trim();
+	return `**${identifierName}** *(parameter)*\n\n\`\`\`pebble\n${nodeText}\n\`\`\``;
+}
+
+function formatFieldDeclaration(node: Parser.SyntaxNode, text: string, identifierName: string): string {
+	const nodeText = text.slice(node.startIndex, node.endIndex).trim();
+	return `**${identifierName}** *(field)*\n\n\`\`\`pebble\n${nodeText}\n\`\`\``;
+}
+
+function getBuiltInInfo(identifierName: string): string | null {
+	const builtIns: Record<string, string> = {
+		// Pebble built-in types
+		'int': '**int** *(built-in type)*\n\nInteger type for whole numbers.',
+		'string': '**string** *(built-in type)*\n\nString type for text data.',
+		'bool': '**bool** *(built-in type)*\n\nBoolean type with values `true` or `false`.',
+		'bytes': '**bytes** *(built-in type)*\n\nByte array type.',
+		'unit': '**unit** *(built-in type)*\n\nUnit type representing no value.',
+		
+		// Pebble keywords
+		'function': '**function** *(keyword)*\n\nDefines a function.',
+		'struct': '**struct** *(keyword)*\n\nDefines a struct type.',
+		'let': '**let** *(keyword)*\n\nDeclares a mutable variable.',
+		'const': '**const** *(keyword)*\n\nDeclares an immutable constant.',
+		'if': '**if** *(keyword)*\n\nConditional statement.',
+		'else': '**else** *(keyword)*\n\nAlternative branch for if statement.',
+		'match': '**match** *(keyword)*\n\nPattern matching expression.',
+		'for': '**for** *(keyword)*\n\nLoop statement.',
+		'while': '**while** *(keyword)*\n\nWhile loop statement.',
+		'return': '**return** *(keyword)*\n\nReturns a value from a function.',
+		'assert': '**assert** *(keyword)*\n\nAssertion statement that fails if condition is false.',
+		'trace': '**trace** *(keyword)*\n\nTracing statement for debugging - prints value to trace log.',
+		'fail': '**fail** *(keyword)*\n\nFails execution immediately with an optional error message.',
+		'true': '**true** *(boolean literal)*\n\nBoolean true value.',
+		'false': '**false** *(boolean literal)*\n\nBoolean false value.',
+		'import': '**import** *(keyword)*\n\nImports definitions from another module.',
+		'as': '**as** *(keyword)*\n\nType casting or import aliasing.',
+		
+		// Common Cardano/Plutus types that might appear in Pebble
+		'ScriptContext': '**ScriptContext** *(type)*\n\nContext information available to Plutus scripts containing transaction and purpose info.',
+		'TxInfo': '**TxInfo** *(type)*\n\nTransaction information including inputs, outputs, and metadata.',
+		'Address': '**Address** *(type)*\n\nBlockchain address type.',
+		'Value': '**Value** *(type)*\n\nValue representing native tokens and ADA.',
+		'Datum': '**Datum** *(type)*\n\nData attached to UTXOs.',
+		'Redeemer': '**Redeemer** *(type)*\n\nData provided when spending a UTXO.',
+		'PubKeyHash': '**PubKeyHash** *(type)*\n\nHash of a public key.',
+		'ValidatorHash': '**ValidatorHash** *(type)*\n\nHash of a validator script.',
+		'CurrencySymbol': '**CurrencySymbol** *(type)*\n\nIdentifier for a native token currency.',
+		'TokenName': '**TokenName** *(type)*\n\nName of a native token.',
+		'POSIXTime': '**POSIXTime** *(type)*\n\nTimestamp in POSIX format.',
+		
+		// Script purposes
+		'Spending': '**Spending** *(constructor)*\n\nScript purpose for spending a UTXO.',
+		'Minting': '**Minting** *(constructor)*\n\nScript purpose for minting/burning tokens.',
+		'Certify': '**Certify** *(constructor)*\n\nScript purpose for certificate validation.',
+		'Burning': '**Burning** *(constructor)*\n\nScript purpose for burning tokens.',
+		
+		// Common patterns
+		'Just': '**Just** *(constructor)*\n\nMaybe type constructor for present values.',
+		'Nothing': '**Nothing** *(constructor)*\n\nMaybe type constructor for absent values.',
+		'Some': '**Some** *(constructor)*\n\nOption type constructor for present values.',
+		'None': '**None** *(constructor)*\n\nOption type constructor for absent values.'
+	};
+	
+	return builtIns[identifierName] || null;
+}
+
+// Find import declarations for an identifier
+function findImportDeclaration(identifierName: string, rootNode: Parser.SyntaxNode, text: string): Parser.SyntaxNode | null {
+	return findImportDeclarationRecursive(identifierName, rootNode, text);
+}
+
+function findImportDeclarationRecursive(identifierName: string, node: Parser.SyntaxNode, text: string): Parser.SyntaxNode | null {
+	// Check if this is an import statement that imports the identifier
+	if (node.type === 'import_statement' || node.type === 'import_declaration') {
+		// Look for the identifier in the import statement
+		for (const child of node.children) {
+			if (child.type === 'identifier') {
+				const childText = text.slice(child.startIndex, child.endIndex);
+				if (childText === identifierName) {
+					return node; // Return the entire import statement
+				}
+			}
+			// Also check for import lists/destructuring
+			if (child.type === 'import_clause' || child.type === 'import_specifier') {
+				for (const grandchild of child.children) {
+					if (grandchild.type === 'identifier') {
+						const grandchildText = text.slice(grandchild.startIndex, grandchild.endIndex);
+						if (grandchildText === identifierName) {
+							return node;
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Recursively search children
+	for (const child of node.children) {
+		const result = findImportDeclarationRecursive(identifierName, child, text);
+		if (result) return result;
+	}
+	
+	return null;
+}
+
+// Get the range of the identifier within a declaration node
+function getIdentifierRangeInDeclarationWithDocument(declarationNode: Parser.SyntaxNode, identifierName: string, text: string, document: TextDocument): Range | null {
+	// Find the identifier child in the declaration
+	for (const child of declarationNode.children) {
+		if (child.type === 'identifier') {
+			const childText = text.slice(child.startIndex, child.endIndex);
+			if (childText === identifierName) {
+				// Use the document to convert offsets to positions
+				return Range.create(
+					document.positionAt(child.startIndex),
+					document.positionAt(child.endIndex)
+				);
+			}
+		}
+	}
+	return null;
+}
 
 connection.onInitialize(() => {
 	const result: InitializeResult = {
@@ -122,367 +527,144 @@ async function validateTextDocument(textDocument: TextDocument): Promise<Diagnos
 }
 
 connection.onCompletion((_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
-	return [
-		{
-			label: 'TypeScript',
-			kind: CompletionItemKind.Text,
-			data: 1
-		},
-		{
-			label: 'JavaScript',
-			kind: CompletionItemKind.Text,
-			data: 2
-		}
-	];
+	return []; // TODO: implement completion items
 });
 
 connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
-	if (item.data === 1) {
-		item.detail = 'TypeScript details';
-		item.documentation = 'TypeScript documentation';
-	} else if (item.data === 2) {
-		item.detail = 'JavaScript details';
-		item.documentation = 'JavaScript documentation';
-	}
-	return item;
+	return item; // TODO: implement completion resolve
 });
 
 connection.onDocumentHighlight((params: DocumentHighlightParams): DocumentHighlight[] => {
-	const results: DocumentHighlight[] = [];
-	const document = documents.get(params.textDocument.uri);
-	if (document !== undefined) {
-		const [source] = Parser.parseFile(document.uri, document.getText());
-		const offset = document.offsetAt(params.position);
-		for (const statement of source.statements) {
-			if (offset >= statement.range.start && offset <= statement.range.end) {
-				if (statement instanceof FuncDecl) {
-					if (statement.expr.body instanceof BlockStmt) {
-						for (const s of statement.expr.body.stmts) {
-							let range = s.range;
-							if (s instanceof AssertStmt) {
-								range = s.condition.range;
-								range.start -= 7;
-								if (s.elseExpr) range.end = s.elseExpr.range.end;
-							}
-							if (s instanceof FailStmt) {
-								if (s.value) {
-									range = s.value.range;
-									range.start -= 5;
-								} else {
-									range.start = range.end - 5;
-								}
-							}
-							if (offset >= range.start && offset <= range.end) {
-								const start = document.positionAt(range.start);
-								const end = document.positionAt(range.end);
-								results.push({
-									range: Range.create(start, end),
-									kind: DocumentHighlightKind.Read
-								});
-							}
-						}
-					}
-				} else {
-					const start = document.positionAt(statement.range.start);
-					const end = document.positionAt(statement.range.end);
-					results.push({
-						range: Range.create(start, end),
-						kind: DocumentHighlightKind.Read
-					});
-				}
-			}
-		}
+	try {
+		const document = documents.get(params.textDocument.uri);
+		if (!document) return [];
+		
+		const text = document.getText();
+		const tree = parser.parse(text);
+		const position = params.position;
+		const offset = document.offsetAt(position);
+		
+		// Find the node at the cursor position
+		const nodeAtPosition = findNodeAtPosition(tree.rootNode, offset);
+		if (!nodeAtPosition) return [];
+		
+		// Get the identifier name at the cursor position
+		const identifierName = getIdentifierName(nodeAtPosition, text);
+		if (!identifierName || identifierName.trim().length === 0) return [];
+		
+		// Don't highlight keywords or very short identifiers (likely not meaningful)
+		if (identifierName.length < 2) return [];
+		
+		// Find all occurrences of this identifier in the document
+		const highlights: DocumentHighlight[] = [];
+		findIdentifierOccurrences(tree.rootNode, identifierName, text, document, highlights);
+		
+		return highlights;
+	} catch (error) {
+		// Log error but don't crash the language server
+		console.error('Error in onDocumentHighlight:', error);
+		return [];
 	}
-	return results;
 });
 
-// TODO: We need to implement SignatureHelp instead, and provide more context
-function getStmtHoverText(statement: PebbleStmt): string {
-	if (statement instanceof IfStmt) return 'If statement';
-	if (statement instanceof VarStmt) return 'Var statement';
-	if (statement instanceof ForStmt) return 'For statement';
-	if (statement instanceof ForOfStmt) return 'For of statement';
-	if (statement instanceof WhileStmt) return 'While statement';
-	if (statement instanceof ReturnStmt) return 'Return statement';
-	if (statement instanceof BlockStmt) return 'Block statement';
-	if (statement instanceof BreakStmt) return 'Break statement';
-	if (statement instanceof ContinueStmt) return 'Continue statement';
-	if (statement instanceof EmptyStmt) return 'Empty statement';
-	if (statement instanceof FailStmt) return 'Fail statement';
-	if (statement instanceof AssertStmt) return 'Assert statement';
-	if (statement instanceof TestStmt) return 'Test statement';
-	if (statement instanceof MatchStmt) return 'Match statement';
-	if (statement instanceof ExportStarStmt) return 'Export star statement';
-	if (statement instanceof ImportStarStmt) return 'Import star statement';
-	if (statement instanceof ExportImportStmt) return 'Export import statement';
-	if (statement instanceof ImportStmt) return 'Import statement';
-	if (statement instanceof TypeImplementsStmt) return 'Type implements statement';
-	if (statement instanceof ExprStmt) return 'Expression  statement';
-	if (statement instanceof UsingStmt) return 'Using  statement';
-	if (statement instanceof ExportStmt) return 'Export statement';
-	if (statement instanceof FuncDecl) return 'Function declaration';
-	if (statement instanceof StructDecl) return 'Struct declaration';
-	return '';
-}
-
 connection.onHover((params: HoverParams): Hover | null => {
-	const document = documents.get(params.textDocument.uri);
-	if (document !== undefined) {
-		const [source] = Parser.parseFile(document.uri, document.getText());
-		const offset = document.offsetAt(params.position);
-		console.log(source.statements);
-		for (const statement of source.statements) {
-			if (offset >= statement.range.start && offset <= statement.range.end) {
-				if (statement instanceof FuncDecl) {
-					if (statement.expr.body instanceof BlockStmt) {
-						for (const s of statement.expr.body.stmts) {
-							let range = s.range;
-							if (s instanceof AssertStmt) {
-								range = s.condition.range;
-								range.start -= 7;
-								if (s.elseExpr) range.end = s.elseExpr.range.end;
-							}
-							if (s instanceof FailStmt) {
-								if (s.value) {
-									range = s.value.range;
-									range.start -= 5;
-								} else {
-									range.start = range.end - 5;
-								}
-							}
-							if (offset >= range.start && offset <= range.end) {
-								const start = document.positionAt(range.start);
-								const end = document.positionAt(range.end);
-								return {
-									contents: {
-										kind: 'markdown',
-										value: getStmtHoverText(s)
-									},
-									range: Range.create(start, end)
-								};
-							}
-						}
-					}
-				} else {
-					const start = document.positionAt(statement.range.start);
-					const end = document.positionAt(statement.range.end);
-					return {
-						contents: {
-							kind: 'markdown',
-							value: getStmtHoverText(statement)
-						},
-						range: Range.create(start, end)
-					};
-				}
-			}
-		}
+	try {
+		const document = documents.get(params.textDocument.uri);
+		if (!document) return null;
+		
+		const text = document.getText();
+		const tree = parser.parse(text);
+		const position = params.position;
+		const offset = document.offsetAt(position);
+		
+		// Find the node at the cursor position
+		const nodeAtPosition = findNodeAtPosition(tree.rootNode, offset);
+		if (!nodeAtPosition) return null;
+		
+		// Generate hover information based on the node type and context
+		const hoverInfo = generateHoverInfo(nodeAtPosition, text, tree.rootNode);
+		if (!hoverInfo) return null;
+		
+		// Create the range for the hover (typically the identifier being hovered)
+		const range = Range.create(
+			document.positionAt(nodeAtPosition.startIndex),
+			document.positionAt(nodeAtPosition.endIndex)
+		);
+		
+		return {
+			contents: {
+				kind: 'markdown',
+				value: hoverInfo
+			},
+			range
+		};
+	} catch (error) {
+		console.error('Error in onHover:', error);
+		return null;
 	}
-	return null;
 });
 
 connection.onDefinition((params: DefinitionParams): Definition | null => {
-	const document = documents.get(params.textDocument.uri);
-	if (!document) return null;
-	
 	try {
-		const [source] = Parser.parseFile(document.uri, document.getText());
-		const offset = document.offsetAt(params.position);
+		const document = documents.get(params.textDocument.uri);
+		if (!document) return null;
 		
-		const identifierInfo = findIdentifierInSource(source, offset);
-		if (!identifierInfo) return null;
+		const text = document.getText();
+		const tree = parser.parse(text);
+		const position = params.position;
+		const offset = document.offsetAt(position);
 		
-		const definition = findDefinition(source.statements, identifierInfo.identifier);
-		if (!definition) return null;
+		// Find the node at the cursor position
+		const nodeAtPosition = findNodeAtPosition(tree.rootNode, offset);
+		if (!nodeAtPosition) return null;
 		
-		const start = document.positionAt(definition.start);
-		const end = document.positionAt(definition.end);
+		// Get the identifier name at the cursor position
+		const identifierName = getIdentifierName(nodeAtPosition, text);
+		if (!identifierName || identifierName.trim().length === 0) return null;
+		
+		// Don't try to find definitions for very short identifiers or built-ins
+		if (identifierName.length < 2) return null;
+		
+		// Check if it's a built-in type/keyword (no definition to jump to)
+		if (getBuiltInInfo(identifierName)) return null;
+		
+		// Find the declaration of this identifier
+		const declaration = findDeclaration(identifierName, tree.rootNode, text);
+		if (!declaration) {
+			// Check if it might be an imported symbol
+			const importDeclaration = findImportDeclaration(identifierName, tree.rootNode, text);
+			if (importDeclaration) {
+				// For now, just return the import statement location
+				// TODO: In the future, this could resolve to the actual file
+				const range = Range.create(
+					document.positionAt(importDeclaration.startIndex),
+					document.positionAt(importDeclaration.endIndex)
+				);
+				
+				return {
+					uri: document.uri,
+					range: range
+				};
+			}
+			return null;
+		}
+		
+		// Create the definition location - focus on the identifier within the declaration
+		const identifierRange = getIdentifierRangeInDeclarationWithDocument(declaration, identifierName, text, document);
+		const range = identifierRange || Range.create(
+			document.positionAt(declaration.startIndex),
+			document.positionAt(declaration.endIndex)
+		);
 		
 		return {
 			uri: document.uri,
-			range: Range.create(start, end)
+			range: range
 		};
 	} catch (error) {
 		console.error('Error in onDefinition:', error);
 		return null;
 	}
 });
-
-interface IdentifierInfo {
-	identifier: Identifier;
-	context: 'variable' | 'function' | 'property' | 'parameter';
-}
-
-function findIdentifierInSource(source: Source, offset: number): IdentifierInfo | null {
-	for (const statement of source.statements) {
-		if (offset >= statement.range.start && offset <= statement.range.end) {
-			const result = findIdentifierInStatement(statement, offset);
-			if (result) return result;
-		}
-	}
-	return null;
-}
-
-function findIdentifierInStatement(statement: PebbleStmt, offset: number): IdentifierInfo | null {
-	if (statement instanceof FuncDecl) {
-		if (statement.expr.name && 
-			offset >= statement.expr.name.range.start && 
-			offset <= statement.expr.name.range.end) {
-			return { identifier: statement.expr.name, context: 'function' };
-		}
-		
-		for (const param of statement.expr.signature.params) {
-			if (param instanceof SimpleVarDecl && param.name && 
-				offset >= param.name.range.start && 
-				offset <= param.name.range.end) {
-				return { identifier: param.name, context: 'parameter' };
-			}
-		}
-		
-		if (statement.expr.body instanceof BlockStmt) {
-			for (const stmt of statement.expr.body.stmts) {
-				const result = findIdentifierInStatement(stmt, offset);
-				if (result) return result;
-			}
-		}
-	}
-	
-	if (statement instanceof VarStmt) {
-		for (const decl of statement.declarations) {
-			if (decl instanceof SimpleVarDecl && decl.name && 
-				offset >= decl.name.range.start && 
-				offset <= decl.name.range.end) {
-				return { identifier: decl.name, context: 'variable' };
-			}
-			if (decl instanceof SimpleVarDecl && decl.initExpr) {
-				const result = findIdentifierInExpression(decl.initExpr, offset);
-				if (result) return result;
-			}
-		}
-	}
-	
-	if (statement instanceof StructDecl) {
-		if (statement.name && 
-			offset >= statement.name.range.start && 
-			offset <= statement.name.range.end) {
-			return { identifier: statement.name, context: 'function' };
-		}
-	}
-	
-	if (statement instanceof ExprStmt) {
-		return findIdentifierInExpression(statement.expr, offset);
-	}
-	
-	if ((statement as any).assignedExpr) {
-		const result = findIdentifierInExpression((statement as any).assignedExpr, offset);
-		if (result) return result;
-	}
-	
-	if (statement instanceof AssertStmt && statement.condition) {
-		return findIdentifierInExpression(statement.condition, offset);
-	}
-	
-	if (statement instanceof FailStmt && statement.value) {
-		return findIdentifierInExpression(statement.value, offset);
-	}
-	
-	if (statement instanceof ReturnStmt && statement.value) {
-		return findIdentifierInExpression(statement.value, offset);
-	}
-	
-	return null;
-}
-
-function findIdentifierInExpression(expr: any, offset: number): IdentifierInfo | null {
-	if (!expr || offset < expr.range.start || offset > expr.range.end) {
-		return null;
-	}
-	
-	if (expr instanceof Identifier) {
-		return { identifier: expr, context: 'variable' };
-	}
-	
-	if (expr.prop && expr.object) {
-		if (offset >= expr.prop.range.start && offset <= expr.prop.range.end) {
-			return { identifier: expr.prop, context: 'property' };
-		}
-		return findIdentifierInExpression(expr.object, offset);
-	}
-	
-	if (expr.funcExpr) {
-		const funcResult = findIdentifierInExpression(expr.funcExpr, offset);
-		if (funcResult) return funcResult;
-		if (expr.args) {
-			for (const arg of expr.args) {
-				const result = findIdentifierInExpression(arg, offset);
-				if (result) return result;
-			}
-		}
-	}
-	
-	if (expr.left && expr.right) {
-		const leftResult = findIdentifierInExpression(expr.left, offset);
-		if (leftResult) return leftResult;
-		
-		const rightResult = findIdentifierInExpression(expr.right, offset);
-		if (rightResult) return rightResult;
-	}
-	
-	if (expr.object && expr.index) {
-		const objResult = findIdentifierInExpression(expr.object, offset);
-		if (objResult) return objResult;
-		
-		const indexResult = findIdentifierInExpression(expr.index, offset);
-		if (indexResult) return indexResult;
-	}
-	
-	return null;
-}
-
-function findDefinition(statements: PebbleStmt[], identifier: Identifier): SourceRange | null {
-	const targetName = identifier.text;
-	if (!targetName) return null;
-	
-	for (const statement of statements) {
-		if (statement instanceof FuncDecl && 
-			statement.expr.name && 
-			statement.expr.name.text === targetName) {
-			return statement.expr.name.range;
-		}
-		
-		if (statement instanceof StructDecl && 
-			statement.name && 
-			statement.name.text === targetName) {
-			return statement.name.range;
-		}
-		
-		if (statement instanceof VarStmt) {
-			for (const decl of statement.declarations) {
-				if (decl instanceof SimpleVarDecl && decl.name && decl.name.text === targetName) {
-					return decl.name.range;
-				}
-			}
-		}
-		
-		if (statement instanceof ImportStmt) {
-			for (const member of statement.members) {
-				if (member.identifier && member.identifier.text === targetName) {
-					return member.identifier.range;
-				}
-				if (member.asIdentifier && member.asIdentifier.text === targetName) {
-					return member.asIdentifier.range;
-				}
-			}
-		}
-
-		if (statement instanceof FuncDecl) {
-			if (statement.expr.body instanceof BlockStmt) {
-				return findDefinition(statement.expr.body.stmts, identifier);
-			}
-		}
-	}
-	
-	return null;
-}
 
 documents.listen(connection);
 
