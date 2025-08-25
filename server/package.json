@@ -6,6 +6,8 @@
 	},
 	"dependencies": {
 		"@harmoniclabs/pebble": "file:../../plu-ts",
+		"tree-sitter": "^0.25.0",
+		"tree-sitter-pebble": "file:../../tree-sitter-pebble",
 		"vscode-languageserver": "^9.0.1",
 		"vscode-languageserver-textdocument": "^1.0.11"
 	},
