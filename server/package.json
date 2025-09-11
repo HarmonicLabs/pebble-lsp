@@ -5,7 +5,7 @@
 		"node": "*"
 	},
 	"dependencies": {
-		"@harmoniclabs/pebble": "file:../../plu-ts",
+		"@harmoniclabs/pebble": "file:../../plu-ts/packages/pebble",
 		"tree-sitter": "^0.25.0",
 		"tree-sitter-pebble": "file:../../tree-sitter-pebble",
 		"vscode-languageserver": "^9.0.1",

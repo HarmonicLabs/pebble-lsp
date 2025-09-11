@@ -1,4 +1,4 @@
-import { AstCompiler } from '@harmoniclabs/pebble';
+import { Parser as PebbleParser } from '@harmoniclabs/pebble';
 
 import {
 	createConnection,
@@ -379,6 +379,16 @@ function getBuiltInInfo(identifierName: string): string | null {
 		'import': '**import** *(keyword)*\n\nImports definitions from another module.',
 		'as': '**as** *(keyword)*\n\nType casting or import aliasing.',
 		
+		// Pebble contract and script keywords
+		'contract': '**contract** *(keyword)*\n\nDefines a smart contract.',
+		'param': '**param** *(keyword)*\n\nDefines a parameter for a contract or script.',
+		'spend': '**spend** *(keyword)*\n\nDefines a spending validator script.',
+		'mint': '**mint** *(keyword)*\n\nDefines a minting policy script.',
+		'certify': '**certify** *(keyword)*\n\nDefines a certificate validation script.',
+		'withdraw': '**withdraw** *(keyword)*\n\nDefines a withdrawal script for stake rewards.',
+		'propose': '**propose** *(keyword)*\n\nDefines a governance proposal script.',
+		'vote': '**vote** *(keyword)*\n\nDefines a governance voting script.',
+		
 		// Common Cardano/Plutus types that might appear in Pebble
 		'ScriptContext': '**ScriptContext** *(type)*\n\nContext information available to Plutus scripts containing transaction and purpose info.',
 		'TxInfo': '**TxInfo** *(type)*\n\nTransaction information including inputs, outputs, and metadata.',
@@ -506,11 +516,9 @@ documents.onDidChangeContent(change => {
 
 async function validateTextDocument(textDocument: TextDocument): Promise<Diagnostic[]> {
 	const documentPath = textDocument.uri.replace('file://', '');
-	const documentBasePath = documentPath.split('/').slice(0, -1).join('/');
 	const documentText = textDocument.getText();
 
-	const compiler = new AstCompiler({ entry: documentPath, root: documentBasePath } as any);
-	const diagnostics = await compiler.compileSource(documentPath, documentText);
+	const [_, diagnostics] = PebbleParser.parseFile(documentPath, documentText);
 
 	return diagnostics.filter(d => d.range).map(d => ({
 		range: Range.create(textDocument.positionAt(d.range!!.start), textDocument.positionAt(d.range!!.end)),
