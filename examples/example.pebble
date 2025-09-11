@@ -19,42 +19,35 @@ struct Animal {
     }
 }
 
-function main({ tx, purpose }: ScriptContext)
-{
-    const [a, b, ...rest] = tx.inputs;
+contract MyContract {
 
-    const Spending {
-        utxoRef, 
-        maybeDatum: Just { 
-            value: datum as MyDatum
-        }
-    } = purpose;
+    param owner: PubKeyHash;
+    param txOutRef: TxOutRef;
 
-    let sumLove = 0;
-    
-    assert tx.outputs.length() === 1 else "only one output allowed";
-    assert sumLove >= 1000_000_000;
+    spend sendToOwner()
+    {
+        const { tx, purpose } = context;
 
-    let a = 0;
-    let b = 1;
-    let c = 2;
-    for (let i = 0; i < 10; i++) {
-        a += 1;
-    }
-    match (purpose) {
-        Spending { utxoRef, maybeDatum: Just{ value: datum as MyDatum } }: {}
-        Minting { }: {}
-        Certify { }: {}
-        _: {}
+        assert tx.outputs.length() == 1 else "only one output allowed";
+        assert tx.outputs[0].address.credential.hash === this.owner;
     }
 
-    const test = 1;
+    mint oneShotMint(quantity: int)
+    {
+        const { tx } = context;
+    }
 
-    assert test === 1;
+    certify doStuff()
+    {
+        let a = 0;
+        trace a;
+        fail a === 1;
+    }
 
-    trace a;
+    withdraw withdrawFunds() {}
 
-    fail a === 1;
+    propose newConstitution() {}
 
-    fail;
+    vote alwaysNo() {}
+
 }
