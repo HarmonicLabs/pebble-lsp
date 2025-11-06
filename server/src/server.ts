@@ -26,7 +26,7 @@ import {
 } from 'vscode-languageserver-textdocument';
 
 import Parser from 'tree-sitter';
-const Pebble = require('tree-sitter-pebble');
+const Pebble = require("@harmoniclabs/tree-sitter-pebble");
 
 const parser = new Parser();
 parser.setLanguage(Pebble);
