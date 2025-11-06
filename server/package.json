@@ -5,11 +5,13 @@
 		"node": "*"
 	},
 	"dependencies": {
-		"@harmoniclabs/pebble": "file:../../plu-ts/packages/pebble",
+		"@harmoniclabs/pebble": "0.1.2",
 		"tree-sitter": "^0.25.0",
-		"tree-sitter-pebble": "file:../../tree-sitter-pebble",
+		"@harmoniclabs/tree-sitter-pebble": "0.1.1",
 		"vscode-languageserver": "^9.0.1",
 		"vscode-languageserver-textdocument": "^1.0.11"
 	},
-	"scripts": {}
+	"scripts": {
+		"build": "tsc"
+	}
 }
