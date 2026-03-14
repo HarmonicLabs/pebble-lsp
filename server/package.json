@@ -5,7 +5,7 @@
 		"node": "*"
 	},
 	"dependencies": {
-		"@harmoniclabs/pebble": "file:../../pebble/packages/pebble",
+		"@harmoniclabs/pebble": "^0.1.3-dev4",
 		"@harmoniclabs/tree-sitter-pebble": "0.1.1",
 		"@harmoniclabs/uint8array-utils": "^1.0.4",
 		"tree-sitter": "^0.25.0",

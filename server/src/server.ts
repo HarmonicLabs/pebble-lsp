@@ -56,6 +56,18 @@ const Pebble = require("@harmoniclabs/tree-sitter-pebble");
 const parser = new Parser();
 parser.setLanguage(Pebble);
 
+const PEBBLE_KEYWORDS = new Set([
+	'const', 'let', 'var', 'if', 'else', 'return', 'assert', 'trace',
+	'fail', 'match', 'for', 'while', 'break', 'continue',
+	'as', 'context', 'contract', 'param', 'spend', 'mint',
+	'certify', 'withdraw', 'propose', 'vote',
+	'import', 'export', 'from', 'struct', 'fn', 'type', 'true', 'false',
+]);
+
+const PEBBLE_BUILTIN_TYPES = new Set([
+	'int', 'bool', 'boolean', 'bytes', 'string', 'void', 'data',
+]);
+
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 
@@ -1704,9 +1716,15 @@ connection.onHover((params: HoverParams): Hover | null => {
 			}
 		}
 
-		// Try compiler type info first
+		// Try compiler type info — only for identifier-like nodes (skip keywords, punctuation, etc.)
 		const cached = checkResultCache.get(params.textDocument.uri);
-		if (cached) {
+		const isIdentifierLike = nodeAtPosition.type === 'identifier'
+			|| nodeAtPosition.type === 'type_identifier'
+			|| nodeAtPosition.type === 'property_identifier'
+			|| nodeAtPosition.type === 'shorthand_property_identifier'
+			|| nodeAtPosition.type === 'shorthand_property_identifier_pattern';
+		const identText = isIdentifierLike ? text.slice(nodeAtPosition.startIndex, nodeAtPosition.endIndex) : '';
+		if (cached && isIdentifierLike && !PEBBLE_KEYWORDS.has(identText)) {
 			const entry = cached.sourceTypeMap.typeAtOffset(offset);
 			if (entry) {
 				const typeName = entry.type.toString();
@@ -1723,24 +1741,33 @@ connection.onHover((params: HoverParams): Hover | null => {
 				);
 				return { contents: { kind: 'markdown', value: hoverText }, range };
 			}
+			// SourceTypeMap is authoritative for identifiers — don't fall through to tree-sitter
+			return null;
 		}
 
-		// Fallback: tree-sitter based hover
-		const hoverInfo = generateHoverInfo(nodeAtPosition, text, tree.rootNode, params.textDocument.uri);
-		if (!hoverInfo) return null;
+		// Keywords should never show hover info
+		if (isIdentifierLike && PEBBLE_KEYWORDS.has(identText)) return null;
 
-		const range = Range.create(
-			document.positionAt(nodeAtPosition.startIndex),
-			document.positionAt(nodeAtPosition.endIndex)
-		);
+		// Fallback: tree-sitter based hover (only when no compiler data available)
+		if (!cached) {
+			const hoverInfo = generateHoverInfo(nodeAtPosition, text, tree.rootNode, params.textDocument.uri);
+			if (!hoverInfo) return null;
 
-		return {
-			contents: {
-				kind: 'markdown',
-				value: hoverInfo
-			},
-			range
-		};
+			const range = Range.create(
+				document.positionAt(nodeAtPosition.startIndex),
+				document.positionAt(nodeAtPosition.endIndex)
+			);
+
+			return {
+				contents: {
+					kind: 'markdown',
+					value: hoverInfo
+				},
+				range
+			};
+		}
+
+		return null;
 	} catch (error) {
 		console.error('Error in onHover:', error);
 		return null;
@@ -2150,7 +2177,7 @@ const CONTRACT_CONTEXT_TYPES: Record<string, ContractContextType> = {
 		name: 'SpendContractContext',
 		fields: [
 			{ name: 'tx', type: 'Tx' },
-			{ name: 'purpose', type: 'Spend' },
+			{ name: 'purpose', type: 'ScriptInfo' },
 			{ name: 'redeemer', type: 'data' },
 			{ name: 'spendingRef', type: 'TxOutRef' },
 			{ name: 'optionalDatum', type: 'Optional<data>' },
@@ -2160,7 +2187,7 @@ const CONTRACT_CONTEXT_TYPES: Record<string, ContractContextType> = {
 		name: 'MintContractContext',
 		fields: [
 			{ name: 'tx', type: 'Tx' },
-			{ name: 'purpose', type: 'Mint' },
+			{ name: 'purpose', type: 'ScriptInfo' },
 			{ name: 'redeemer', type: 'data' },
 			{ name: 'policy', type: 'PolicyId' },
 		],
@@ -2169,7 +2196,7 @@ const CONTRACT_CONTEXT_TYPES: Record<string, ContractContextType> = {
 		name: 'WithdrawContractContext',
 		fields: [
 			{ name: 'tx', type: 'Tx' },
-			{ name: 'purpose', type: 'Withdraw' },
+			{ name: 'purpose', type: 'ScriptInfo' },
 			{ name: 'redeemer', type: 'data' },
 			{ name: 'credential', type: 'Credential' },
 		],
@@ -2178,7 +2205,7 @@ const CONTRACT_CONTEXT_TYPES: Record<string, ContractContextType> = {
 		name: 'CertifyContractContext',
 		fields: [
 			{ name: 'tx', type: 'Tx' },
-			{ name: 'purpose', type: 'Certificate' },
+			{ name: 'purpose', type: 'ScriptInfo' },
 			{ name: 'redeemer', type: 'data' },
 			{ name: 'certificateIndex', type: 'int' },
 			{ name: 'certificate', type: 'Certificate' },
@@ -2188,7 +2215,7 @@ const CONTRACT_CONTEXT_TYPES: Record<string, ContractContextType> = {
 		name: 'ProposeContractContext',
 		fields: [
 			{ name: 'tx', type: 'Tx' },
-			{ name: 'purpose', type: 'Propose' },
+			{ name: 'purpose', type: 'ScriptInfo' },
 			{ name: 'redeemer', type: 'data' },
 			{ name: 'proposalIndex', type: 'int' },
 			{ name: 'proposal', type: 'ProposalProcedure' },
@@ -2198,7 +2225,7 @@ const CONTRACT_CONTEXT_TYPES: Record<string, ContractContextType> = {
 		name: 'VoteContractContext',
 		fields: [
 			{ name: 'tx', type: 'Tx' },
-			{ name: 'purpose', type: 'Vote' },
+			{ name: 'purpose', type: 'ScriptInfo' },
 			{ name: 'redeemer', type: 'data' },
 			{ name: 'voter', type: 'Voter' },
 		],
@@ -2274,23 +2301,67 @@ connection.languages.semanticTokens.on((params: SemanticTokensParams) => {
 	// Token type indices (must match SEMANTIC_TOKEN_TYPES array)
 	const TOKEN_TYPE = 0;      // 'type'
 	const TOKEN_VARIABLE = 1;  // 'variable'
+	const TOKEN_FUNCTION = 5;  // 'function'
 	const TOKEN_KEYWORD = 4;   // 'keyword'
 
 	// Token modifier bits (must match SEMANTIC_TOKEN_MODIFIERS array)
 	const MOD_READONLY = 1 << 1; // 'readonly'
 
-	// Pass 1: collect all const-declared names
+	// Pass 1: collect all const-declared and function names
 	const constNames = new Set<string>();
+	const funcNames = new Set<string>();
 	collectConstNames(tree.rootNode);
+	const cached = checkResultCache.get(params.textDocument.uri);
+	if (cached) {
+		for (const entry of cached.sourceTypeMap.allEntries()) {
+			if (!entry.name || entry.kind === 'type-reference') continue;
+			if (PEBBLE_KEYWORDS.has(entry.name) || /^[A-Z]/.test(entry.name) || PEBBLE_BUILTIN_TYPES.has(entry.name)) continue;
+			// function-type entries go to funcNames, others to constNames
+			if (entry.type.toString().includes('->')) {
+				funcNames.add(entry.name);
+			} else {
+				constNames.add(entry.name);
+			}
+		}
+	}
 
-	// Pass 2: mark all identifiers that are const-declared as readonly
+	// Pass 2: mark all identifiers that are const-declared as readonly, and type names
 	markConstUsages(tree.rootNode);
+
+	// Pass 3: mark type references from compiler SourceTypeMap
+	if (cached) {
+		for (const entry of cached.sourceTypeMap.allEntries()) {
+			if (entry.kind === 'type-reference') {
+				const startPos = document.positionAt(entry.start);
+				const length = entry.end - entry.start;
+				builder.push(startPos.line, startPos.character, length, TOKEN_TYPE, 0);
+			}
+		}
+	}
 
 	function collectConstNames(node: Parser.SyntaxNode) {
 		if (node.type === 'lexical_declaration' || node.type === 'variable_declaration') {
 			const declKind = node.children[0];
 			if (declKind && text.slice(declKind.startIndex, declKind.endIndex) === 'const') {
 				collectNamesFromPattern(node);
+			}
+		}
+		// Function declarations: collect name as function name
+		if (node.type === 'function_declaration' || node.type === 'generator_function_declaration') {
+			const nameChild = node.children.find(c => c.type === 'identifier');
+			if (nameChild) {
+				funcNames.add(text.slice(nameChild.startIndex, nameChild.endIndex));
+			}
+		}
+		// Contract method declarations: spend/mint/etc. followed by method name
+		if (node.type === 'identifier') {
+			const prev = node.previousSibling;
+			if (prev && prev.type === 'identifier') {
+				const prevText = text.slice(prev.startIndex, prev.endIndex);
+				if (prevText === 'spend' || prevText === 'mint' || prevText === 'withdraw' ||
+					prevText === 'certify' || prevText === 'propose' || prevText === 'vote') {
+					funcNames.add(text.slice(node.startIndex, node.endIndex));
+				}
 			}
 		}
 		// Function parameters are constants by default in Pebble
@@ -2312,7 +2383,7 @@ connection.languages.semanticTokens.on((params: SemanticTokensParams) => {
 		for (const child of node.children) {
 			if (child.type === 'identifier') {
 				const name = text.slice(child.startIndex, child.endIndex);
-				if (name === 'const') continue;
+				if (PEBBLE_KEYWORDS.has(name)) continue;
 				if (/^[A-Z]/.test(name)) continue;
 				if (isInPatternPosition(child)) {
 					constNames.add(name);
@@ -2331,10 +2402,14 @@ connection.languages.semanticTokens.on((params: SemanticTokensParams) => {
 	}
 
 	function markConstUsages(node: Parser.SyntaxNode) {
-		// Mark identifier usages of const-declared names
-		if (node.type === 'identifier') {
+		if (node.type === 'identifier' || node.type === 'type_identifier') {
 			const name = text.slice(node.startIndex, node.endIndex);
-			if (constNames.has(name) && !isPropertyPosition(node)) {
+			// Uppercase-starting identifiers and built-in type names are types
+			if ((/^[A-Z]/.test(name) || PEBBLE_BUILTIN_TYPES.has(name)) && !isPropertyPosition(node)) {
+				pushToken(node, TOKEN_TYPE, 0);
+			} else if (funcNames.has(name) && !isPropertyPosition(node)) {
+				pushToken(node, TOKEN_FUNCTION, 0);
+			} else if (constNames.has(name) && !isPropertyPosition(node)) {
 				pushToken(node, TOKEN_VARIABLE, MOD_READONLY);
 			}
 		}

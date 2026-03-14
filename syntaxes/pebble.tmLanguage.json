@@ -77,6 +77,9 @@
 					"include": "#struct-declaration"
 				},
 				{
+					"include": "#contract-declaration"
+				},
+				{
 					"include": "#namespace-declaration"
 				},
 				{
@@ -1915,6 +1918,100 @@
 				},
 				{
 					"include": "#comment"
+				}
+			]
+		},
+		"contract-declaration": {
+			"name": "meta.contract.ts",
+			"begin": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))\\b(contract)\\b(?=\\s+|/[/*])",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.contract.ts"
+				}
+			},
+			"end": "(?<=\\})",
+			"patterns": [
+				{
+					"include": "#comment"
+				},
+				{
+					"match": "[_$[:alpha:]][_$[:alnum:]]*",
+					"captures": {
+						"0": {
+							"name": "entity.name.type.contract.ts"
+						}
+					}
+				},
+				{
+					"include": "#contract-body"
+				}
+			]
+		},
+		"contract-body": {
+			"name": "meta.contract.body.ts",
+			"begin": "\\{",
+			"beginCaptures": {
+				"0": {
+					"name": "punctuation.definition.block.ts"
+				}
+			},
+			"end": "\\}",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.definition.block.ts"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comment"
+				},
+				{
+					"include": "#contract-param"
+				},
+				{
+					"include": "#contract-method"
+				}
+			]
+		},
+		"contract-param": {
+			"name": "meta.contract.param.ts",
+			"match": "(?<![_$[:alnum:]])\\b(param)\\b\\s+([_$[:alpha:]][_$[:alnum:]]*)\\s*(:)\\s*([_$[:alpha:]][_$[:alnum:]]*)",
+			"captures": {
+				"1": {
+					"name": "storage.type.ts"
+				},
+				"2": {
+					"name": "variable.other.readwrite.ts"
+				},
+				"3": {
+					"name": "keyword.operator.type.annotation.ts"
+				},
+				"4": {
+					"name": "entity.name.type.ts"
+				}
+			}
+		},
+		"contract-method": {
+			"name": "meta.contract.method.ts",
+			"begin": "(?<![_$[:alnum:]])\\b(spend|mint|certify|withdraw|propose|vote)\\b\\s+([_$[:alpha:]][_$[:alnum:]]*)\\s*(?=\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.ts"
+				},
+				"2": {
+					"name": "meta.definition.method.ts entity.name.function.ts"
+				}
+			},
+			"end": "(?<=\\})",
+			"patterns": [
+				{
+					"include": "#comment"
+				},
+				{
+					"include": "#function-parameters"
+				},
+				{
+					"include": "#decl-block"
 				}
 			]
 		},
@@ -4005,12 +4102,12 @@
 					"match": "([[:upper:]][_$[:digit:][:upper:]]*)(?![_$[:alnum:]])"
 				},
 				{
-					"name": "entity.name.type.ts",
-					"match": "([[:upper:]][_$[:alnum:]]*)(?![_$[:alnum:]])"
-				},
-				{
 					"name": "storage.type.ts",
 					"match": "(?<![_$[:alnum:]])(context)(?![_$[:alnum:]])"
+				},
+				{
+					"name": "keyword.control.pebble.ts",
+					"match": "(?<![_$[:alnum:]])(as)(?![_$[:alnum:]])"
 				},
 				{
 					"name": "variable.other.readwrite.ts",
@@ -4340,7 +4437,7 @@
 		},
 		"type-primitive": {
 			"name": "support.type.primitive.ts",
-			"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(bool|void|int|data|bytes)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
+			"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(bool|void|int|data|bytes|string)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
 		},
 		"type-builtin-literals": {
 			"name": "support.type.builtin.ts",
