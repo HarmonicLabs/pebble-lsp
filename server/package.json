@@ -5,9 +5,10 @@
 		"node": "*"
 	},
 	"dependencies": {
-		"@harmoniclabs/pebble": "0.1.2",
-		"tree-sitter": "^0.25.0",
+		"@harmoniclabs/pebble": "file:../../pebble/packages/pebble",
 		"@harmoniclabs/tree-sitter-pebble": "0.1.1",
+		"@harmoniclabs/uint8array-utils": "^1.0.4",
+		"tree-sitter": "^0.25.0",
 		"vscode-languageserver": "^9.0.1",
 		"vscode-languageserver-textdocument": "^1.0.11"
 	},

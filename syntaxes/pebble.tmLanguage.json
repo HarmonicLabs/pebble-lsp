@@ -163,7 +163,11 @@
 				},
 				{
 					"name": "keyword.control.pebble.ts",
-					"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(assert|trace|fail|match|contract|param|spend|mint|certify|withdraw|propose|vote)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
+					"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(assert|trace|fail|match)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
+				},
+				{
+					"name": "storage.type.ts",
+					"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(contract|param|spend|mint|certify|withdraw|propose|vote|context)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
 				}
 			]
 		},
@@ -3423,6 +3427,21 @@
 		"cast": {
 			"patterns": [
 				{
+					"name": "meta.cast.pebble.ts",
+					"begin": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(as)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.control.pebble.ts"
+						}
+					},
+					"end": "(?=[);,}\\]\\n]|$|\\b(?:as|const|let|var|return|if|else|for|while|do|switch|case|break|continue|throw|try|catch|finally|function|class|struct|contract|import|export|assert|fail|trace|match|spend|mint|certify|withdraw|propose|vote|param)\\b|[=+\\-*/<>!&|^?])",
+					"patterns": [
+						{
+							"include": "#type"
+						}
+					]
+				},
+				{
 					"name": "cast.expr.ts",
 					"match": "\\s*(<)\\s*(const)\\s*(>)",
 					"captures": {
@@ -3986,6 +4005,14 @@
 					"match": "([[:upper:]][_$[:digit:][:upper:]]*)(?![_$[:alnum:]])"
 				},
 				{
+					"name": "entity.name.type.ts",
+					"match": "([[:upper:]][_$[:alnum:]]*)(?![_$[:alnum:]])"
+				},
+				{
+					"name": "storage.type.ts",
+					"match": "(?<![_$[:alnum:]])(context)(?![_$[:alnum:]])"
+				},
+				{
 					"name": "variable.other.readwrite.ts",
 					"match": "[_$[:alpha:]][_$[:alnum:]]*"
 				}
@@ -4313,7 +4340,7 @@
 		},
 		"type-primitive": {
 			"name": "support.type.primitive.ts",
-			"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(string|number|bigint|boolean|symbol|any|void|never|unknown|int)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
+			"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(bool|void|int|data|bytes)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
 		},
 		"type-builtin-literals": {
 			"name": "support.type.builtin.ts",

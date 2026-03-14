@@ -95,6 +95,7 @@
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
+		"build": "npm run compile",
 		"compile": "tsc -b",
 		"watch": "tsc -b -w",
 		"lint": "eslint",
