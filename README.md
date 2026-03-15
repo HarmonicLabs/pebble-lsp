@@ -1,3 +1,17 @@
+<p align="center">
+  <img width="70%" src="./assets/header.png" align="center"/>
+  <p align="center">A simple, yet rock solid, functional language with an imperative bias, targeting UPLC</p>
+
+  <p align="center">
+    <a href="https://twitter.com/hlabs_tech">
+      <img src="https://img.shields.io/twitter/follow/hlabs_tech?style=for-the-badge&logo=twitter" />
+    </a>
+    <a href="https://twitter.com/MicheleHarmonic">
+      <img src="https://img.shields.io/twitter/follow/MicheleHarmonic?style=for-the-badge&logo=twitter" />
+    </a>
+  </p>
+</p>
+
 # Pebble LSP
 
 A VS Code Language Server Protocol (LSP) extension for the Pebble programming language, providing comprehensive language support including syntax highlighting, diagnostics, and intelligent code features.

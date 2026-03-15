@@ -5,10 +5,14 @@
 	"publisher": "HarmonicLabs",
 	"version": "0.0.2",
 	"repository": "https://github.com/HarmonicLabs/pebble-lsp",
+	"icon": "assets/icon.png",
 	"categories": [
 		"Programming Languages",
 		"Snippets",
-		"Other"
+		"Other",
+		"Extension Packs",
+		"Language Packs",
+		"Testing"
 	],
 	"keywords": [
 		"multi-root ready"
