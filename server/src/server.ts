@@ -41,7 +41,7 @@ import {
 	SemanticTokensLegend,
 	SemanticTokensParams,
 	type DocumentDiagnosticReport,
-} from 'vscode-languageserver/node';
+} from 'vscode-languageserver/node.js';
 
 import {
 	TextDocument
@@ -51,16 +51,16 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import Parser from 'tree-sitter';
-const Pebble = require("@harmoniclabs/tree-sitter-pebble");
+import Pebble from '@harmoniclabs/tree-sitter-pebble';
 
 const parser = new Parser();
-parser.setLanguage(Pebble);
+parser.setLanguage(Pebble as unknown as Parser.Language);
 
 const PEBBLE_KEYWORDS = new Set([
 	'const', 'let', 'var', 'if', 'else', 'return', 'assert', 'trace',
 	'fail', 'match', 'for', 'while', 'break', 'continue',
 	'as', 'context', 'contract', 'param', 'spend', 'mint',
-	'certify', 'withdraw', 'propose', 'vote',
+	'certify', 'withdraw', 'propose', 'vote', 'state',
 	'import', 'export', 'from', 'struct', 'fn', 'type', 'true', 'false',
 ]);
 
@@ -2298,7 +2298,7 @@ connection.languages.semanticTokens.on((params: SemanticTokensParams) => {
 		builder.push(startPos.line, startPos.character, length, tokenType, tokenModifiers);
 	}
 
-	// Token type indices (must match SEMANTIC_TOKEN_TYPES array)
+	// Token type indices (must match SEMANTIC_TOKEN_<<<<<TYPES array)
 	const TOKEN_TYPE = 0;      // 'type'
 	const TOKEN_VARIABLE = 1;  // 'variable'
 	const TOKEN_FUNCTION = 5;  // 'function'

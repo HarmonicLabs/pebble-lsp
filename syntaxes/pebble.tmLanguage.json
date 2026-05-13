@@ -1969,7 +1969,72 @@
 					"include": "#contract-param"
 				},
 				{
+					"include": "#contract-state"
+				},
+				{
 					"include": "#contract-method"
+				}
+			]
+		},
+		"contract-state": {
+			"name": "meta.contract.state.ts",
+			"begin": "(?<![_$[:alnum:]])\\b(state)\\b\\s+([_$[:alpha:]][_$[:alnum:]]*)\\s*(\\{)",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.ts"
+				},
+				"2": {
+					"name": "entity.name.type.state.ts"
+				},
+				"3": {
+					"name": "punctuation.definition.block.ts"
+				}
+			},
+			"end": "\\}",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.definition.block.ts"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comment"
+				},
+				{
+					"include": "#contract-method"
+				},
+				{
+					"match": "([_$[:alpha:]][_$[:alnum:]]*)\\s*(:)\\s*([_$[:alpha:]][_$[:alnum:]]*)",
+					"captures": {
+						"1": {
+							"name": "variable.other.readwrite.ts"
+						},
+						"2": {
+							"name": "keyword.operator.type.annotation.ts"
+						},
+						"3": {
+							"name": "entity.name.type.ts"
+						}
+					}
+				},
+				{
+					"begin": "\\{",
+					"beginCaptures": {
+						"0": {
+							"name": "punctuation.definition.block.ts"
+						}
+					},
+					"end": "\\}",
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.definition.block.ts"
+						}
+					},
+					"patterns": [
+						{
+							"include": "$self"
+						}
+					]
 				}
 			]
 		},
