@@ -1,4 +1,4 @@
-import { Parser as PebbleParser, Compiler } from '@harmoniclabs/pebble';
+import { Parser as PebbleParser, Compiler, defaultOptions, COMPILER_VERSION } from '@harmoniclabs/pebble';
 import type { CheckResult, CompilerIoApi } from '@harmoniclabs/pebble';
 
 import {
@@ -1439,7 +1439,9 @@ async function validateTextDocument(textDocument: TextDocument): Promise<Diagnos
 	// --- Run the full compiler frontend for type-checking diagnostics ---
 	try {
 		const io = createLspCompilerIoApi( documentPath, documentText );
-		const compiler = new Compiler( io );
+		// `@harmoniclabs/pebble@0.2.0+` requires a CompilerOptions on the
+		// constructor; `compilerVersion` is mandatory and policed at runtime.
+		const compiler = new Compiler( io, { ...defaultOptions, compilerVersion: COMPILER_VERSION } );
 		const result = await compiler.check({ entry: documentPath, root: path.dirname( documentPath ) + '/' });
 		// cache for hover / completion
 		checkResultCache.set( textDocument.uri, result );

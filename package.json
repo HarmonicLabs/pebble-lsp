@@ -3,7 +3,7 @@
 	"displayName": "Pebble Language",
 	"description": "Language support for Pebble including syntax highlighting and LSP",
 	"publisher": "HarmonicLabs",
-	"version": "0.1.10",
+	"version": "0.3.0",
 	"repository": "https://github.com/HarmonicLabs/pebble-lsp",
 	"icon": "assets/icon.png",
 	"categories": [

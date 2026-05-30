@@ -6,8 +6,8 @@
 		"node": "*"
 	},
 	"dependencies": {
-		"@harmoniclabs/pebble": "^0.1.10",
-		"@harmoniclabs/tree-sitter-pebble": "0.1.2",
+		"@harmoniclabs/pebble": "^0.3.0",
+		"@harmoniclabs/tree-sitter-pebble": "^0.3.0",
 		"@harmoniclabs/uint8array-utils": "^1.0.4",
 		"tree-sitter": "^0.25.0",
 		"vscode-languageserver": "^9.0.1",
