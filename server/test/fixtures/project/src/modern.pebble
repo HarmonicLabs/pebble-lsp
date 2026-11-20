@@ -1,0 +1,16 @@
+// Syntax introduced around pebble 0.6.0: map literals, `case ... is Ctor{} =>`, `+=`.
+
+export function bump( n: int ): int {
+    let total = n;
+    total += 1;
+    return total;
+}
+
+export function lookup( k: bytes ): int {
+    const m: LinearMap<bytes, int> = { #01: 10, #02: 20 };
+    return case m.find( ( e ) => e.key == k ) is Some{ value } => value.value is None{} => 0;
+}
+
+export function unwrapOr( o: Optional<int> ): int {
+    return case o is Some{ value } => value is None{} => 0;
+}

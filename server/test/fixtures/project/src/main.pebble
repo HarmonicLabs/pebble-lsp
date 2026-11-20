@@ -1,0 +1,17 @@
+import { K, double, Point } from "./lib.pebble";
+
+export function scaled( n: int ): int {
+    return double( n ) * K;
+}
+
+export function origin(): Point {
+    return Point{ x: 0, y: 0 };
+}
+
+export function move( p: Point ): Point {
+    return Point{ x: p.x + 1, y: p.y };
+}
+
+test scaled_works() {
+    assert scaled( 2 ) == 12;
+}
