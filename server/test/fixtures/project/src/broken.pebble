@@ -1,0 +1,7 @@
+// A parse error: `double` is called with an unclosed argument list.
+
+import { double } from "./lib.pebble";
+
+export function broken(): int {
+    return double( 1;
+}

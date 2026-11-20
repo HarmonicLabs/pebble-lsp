@@ -1,0 +1,12 @@
+// Shared helpers, imported by `main.pebble`.
+
+export const K = 3;
+
+export function double( x: int ): int {
+    return x * 2;
+}
+
+export struct Point {
+    x: int,
+    y: int
+}

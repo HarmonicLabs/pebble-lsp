@@ -1,0 +1,7 @@
+// A deliberate type error: `double` takes an int.
+
+import { double } from "./lib.pebble";
+
+export function bad(): int {
+    return double( "not an int" );
+}
