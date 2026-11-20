@@ -49,8 +49,9 @@ Pebble 0.6.0, and the editor features that its `check()` makes possible.
 
 - `tree-sitter-pebble@0.3.0` (still the latest) does not parse map literals
   (`{ #01: 10 }`), `case … is Some{} =>`, or struct literals in return position
-  (`return Point{ … }`). The compiler handles all of them; only the tree-sitter fallbacks
-  (document highlight, signature help, rename, semantic tokens) are affected.
+  (`return Point{ … }`). It does parse `+=`. The compiler handles all of them; only the
+  tree-sitter fallbacks (document highlight, signature help, rename, semantic tokens) are
+  affected.
 - Rename still matches names by text in the syntax tree, not through the symbol index.
 
 ## 0.3.0

@@ -145,8 +145,8 @@ of a type's members after a `.`, and that 0.6.0 syntax (map literals, `case … 
   current syntax — map literals (`{ #01: 10 }`), `case … is Some{} =>`, and struct literals
   in return position (`return Point{ … }`) — so the tree-sitter fallbacks (document
   highlight, signature help, rename, semantic tokens, and any answer the compiler index
-  does not give) can be wrong or empty there. Diagnostics, definition, references, hover
-  and completion do not depend on it: they come from the compiler.
+  does not give) can be wrong or empty there. `+=` parses fine. Diagnostics, definition,
+  references, hover and completion do not depend on the tree: they come from the compiler.
 - **References are as wide as the project's check.** `references()` answers for the files
   a check compiled. The server unions the open document's check with the project's own
   (`pebble.config.json` `entry`), so files outside that graph (a test file the entry does
