@@ -1,5 +1,5 @@
 import { Parser as PebbleParser, Compiler, defaultOptions, COMPILER_VERSION } from '@harmoniclabs/pebble';
-import type { CheckResult, CompilerIoApi } from '@harmoniclabs/pebble';
+import type { CheckResult, CompilerIoApi, PebbleSymbol, PebbleSymbolKind, TypeEntry } from '@harmoniclabs/pebble';
 
 import {
 	createConnection,
@@ -72,7 +72,20 @@ const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 
 // Cache for type-check results per document
-const checkResultCache = new Map<string, CheckResult>();
+// (`@harmoniclabs/pebble@0.6.0`: `check()` returns diagnostics, the type map and the
+//  symbol index of every file the check compiled, the entry and what it imports)
+interface CheckedDocument {
+	/** what `Compiler.check()` returned */
+	result: CheckResult;
+	/** the file system path of the document the check started from */
+	documentPath: string;
+	/** the project root the check ran with */
+	root: string;
+	/** canonical file system path -> the path the compiler reports it by (`PebbleSymbol.source`) */
+	files: Map<string, string>;
+}
+
+const checkResultCache = new Map<string, CheckedDocument>();
 
 // Semantic token types and modifiers for syntax highlighting
 const SEMANTIC_TOKEN_TYPES = [
@@ -105,14 +118,14 @@ function createLspCompilerIoApi( currentDocPath: string, currentDocText: string 
 		readFile: ( filename: string, _baseDir: string ) => {
 			// if reading the current document, use the in-memory version
 			if( filename === currentDocPath ) return currentDocText;
-			// for any other file, read from disk
-			try { return fs.readFileSync( filename, 'utf-8' ); }
-			catch { return undefined; }
+			// any other file: an open document's text (possibly with unsaved edits), else
+			// the file on disk
+			return textOfCompilerFile( filename );
 		},
 		writeFile: () => {},
 		exsistSync: ( filename: string ) => {
 			if( filename === currentDocPath ) return true;
-			return fs.existsSync( filename );
+			return textOfCompilerFile( filename ) !== undefined;
 		},
 		listFiles: ( dirname: string, _baseDir: string ) => {
 			try { return fs.readdirSync( dirname ); }
@@ -120,6 +133,353 @@ function createLspCompilerIoApi( currentDocPath: string, currentDocText: string 
 		},
 		reportDiagnostic: () => {},
 	};
+}
+
+// ── Project root and compiler path mapping ──────────────────────────
+//
+// `Compiler.check()` normalises every path it is given (POSIX, resolved, absolute) and
+// reports files by that path (`PebbleSymbol.source`, `TypeEntry.source`). Documents arrive
+// as URIs. These helpers translate between the two.
+
+/** the path the compiler would report a file by: absolute, resolved, POSIX separators */
+function canonicalFsPath( filePath: string ): string {
+	let abs = path.resolve( filePath );
+	if( process.platform === 'win32' ) abs = abs.replace( /\\/g, '/' ).toLowerCase();
+	return abs;
+}
+
+/**
+ * The project root of `documentPath`: the nearest directory above it holding a
+ * `pebble.config.json`, else the document's own directory. Imports resolve against the
+ * entry file, but the root is what a project's config names, so use it when there is one.
+ */
+function findProjectRoot( documentPath: string ): string {
+	const startDir = path.dirname( documentPath );
+	let dir = startDir;
+	for( let i = 0; i < 64; i++ ) {
+		if( fs.existsSync( path.join( dir, 'pebble.config.json' ) ) ) return dir;
+		const parent = path.dirname( dir );
+		if( parent === dir ) break;
+		dir = parent;
+	}
+	return startDir;
+}
+
+/** the path the compiler knows the document by, `undefined` if the check does not hold it */
+function compilerFileOf( checked: CheckedDocument, documentPath: string ): string | undefined {
+	return checked.files.get( canonicalFsPath( documentPath ) );
+}
+
+/** the URI of a file the compiler reported: an open document's, else its `file:` URI */
+function uriOfCompilerFile( filePath: string ): string {
+	const canonical = canonicalFsPath( filePath );
+	for( const open of documents.all() ) {
+		if( canonicalFsPath( fileURLToPath( open.uri ) ) === canonical ) return open.uri;
+	}
+	return pathToFileURL( path.resolve( filePath ) ).toString();
+}
+
+/** the current text of a file the compiler reported: the open document's, else the disk's */
+function textOfCompilerFile( filePath: string ): string | undefined {
+	const open = documents.get( uriOfCompilerFile( filePath ) );
+	if( open !== undefined ) return open.getText();
+	try {
+		return fs.readFileSync( path.resolve( filePath ), 'utf-8' );
+	} catch {
+		return undefined;
+	}
+}
+
+/** an offset range of a compiler file as an LSP `Range` */
+function compilerRangeToRange( filePath: string, start: number, end: number ): Range | undefined {
+	const text = textOfCompilerFile( filePath );
+	if( text === undefined ) return undefined;
+	const doc = TextDocument.create( uriOfCompilerFile( filePath ), 'pebble', 0, text );
+	return Range.create( doc.positionAt( start ), doc.positionAt( end ) );
+}
+
+/** an offset range of a compiler file as an LSP `Location` */
+function compilerRangeToLocation( filePath: string, start: number, end: number ): Location | undefined {
+	const range = compilerRangeToRange( filePath, start, end );
+	if( range === undefined ) return undefined;
+	return Location.create( uriOfCompilerFile( filePath ), range );
+}
+
+/**
+ * Runs `check()` on `entryPath` and packages the result: the check itself, the root it ran
+ * with, and the files it compiled (by canonical path, as the compiler reports them).
+ */
+async function runCheck( entryPath: string, entryText: string, root: string ): Promise<CheckedDocument> {
+	const io = createLspCompilerIoApi( entryPath, entryText );
+	// `@harmoniclabs/pebble@0.2.0+` requires a CompilerOptions on the constructor;
+	// `compilerVersion` is mandatory and policed at runtime
+	const compiler = new Compiler( io, { ...defaultOptions, compilerVersion: COMPILER_VERSION } );
+	const result = await compiler.check({ entry: entryPath, root: root + path.sep });
+
+	const files = new Map<string, string>();
+	files.set( canonicalFsPath( entryPath ), entryPath );
+	for( const file of result.sourceTypeMap.files() ) {
+		files.set( canonicalFsPath( file ), file );
+	}
+	return { result, documentPath: entryPath, root, files };
+}
+
+/** the project's own check (the `entry` of its `pebble.config.json`), by root */
+const projectCheckCache = new Map<string, CheckedDocument>();
+
+/**
+ * The check of the project `root` names in its `pebble.config.json`, `undefined` when it
+ * has no config or no usable `entry`. A check answers only for the files it compiled, so
+ * references reach the whole project only through this one.
+ */
+async function projectCheckOf( root: string ): Promise<CheckedDocument | undefined> {
+	const cached = projectCheckCache.get( root );
+	if( cached !== undefined ) return cached;
+
+	let entry: string | undefined;
+	try {
+		const config = JSON.parse( fs.readFileSync( path.join( root, 'pebble.config.json' ), 'utf-8' ) );
+		if( typeof config?.entry === 'string' ) entry = path.resolve( root, config.entry );
+	} catch {
+		return undefined;
+	}
+	if( entry === undefined || textOfCompilerFile( entry ) === undefined ) return undefined;
+
+	try {
+		const checked = await runCheck( entry, textOfCompilerFile( entry ) ?? '', root );
+		projectCheckCache.set( root, checked );
+		return checked;
+	} catch {
+		return undefined;
+	}
+}
+
+/** the check of `document` and the path the compiler knows it by */
+function checkOf( document: TextDocument ): { checked: CheckedDocument; file: string } | undefined {
+	const checked = checkResultCache.get( document.uri );
+	if( checked === undefined ) return undefined;
+	const file = compilerFileOf( checked, fileURLToPath( document.uri ) );
+	if( file === undefined ) return undefined;
+	return { checked, file };
+}
+
+/** the symbol indexed at `offset` of `document`, if `check()` has an index for it */
+function symbolAtOffset( document: TextDocument, offset: number ): { checked: CheckedDocument; file: string; symbol: PebbleSymbol } | undefined {
+	const found = checkOf( document );
+	if( found === undefined ) return undefined;
+	const symbol = found.checked.result.symbols.symbolAt( found.file, offset );
+	if( symbol === undefined ) return undefined;
+	return { ...found, symbol };
+}
+
+/** a project-relative path for display (`src/lib.pebble`) */
+function displayPath( root: string, filePath: string ): string {
+	const rel = path.relative( root, path.resolve( filePath ) );
+	return rel.length > 0 && !rel.startsWith( '..' ) ? rel.split( path.sep ).join( '/' ) : path.basename( filePath );
+}
+
+// ── Symbol index (`CheckResult.symbols`, pebble 0.6.0) ──────────────
+//
+// `check()` indexes the declarations of every file it checked and the uses of each, so
+// definitions, references, hover and completion answer by name resolution instead of by
+// matching text in the syntax tree. Each returns `undefined` when the index has nothing to
+// say (no check yet, a file the check does not hold, a position not on a name): the handlers
+// then fall back to the tree-sitter logic.
+
+/** the definition of the symbol at `offset`, across imports */
+function definitionAtOffset( document: TextDocument, offset: number ): Location | null {
+	const found = symbolAtOffset( document, offset );
+	if( found === undefined ) return null;
+
+	const { symbols } = found.checked.result;
+	const definition = symbols.definitionOf( found.symbol );
+	// an import the compiler could not resolve names nothing: let the tree-sitter
+	// import resolution try the file system
+	if( definition === found.symbol && definition.kind === 'import' && definition.target === undefined ) {
+		return null;
+	}
+	return compilerRangeToLocation( definition.source, definition.nameRange.start, definition.nameRange.end ) ?? null;
+}
+
+/**
+ * Every place naming the symbol at `offset`, in every file of the check. `references()`
+ * answers for the files its own check compiled, so the project's check (the entry of its
+ * `pebble.config.json`) is consulted too: that is what makes the answer project-wide.
+ */
+async function referencesAtOffset( document: TextDocument, offset: number, includeDeclaration: boolean ): Promise<Location[] | null> {
+	const found = symbolAtOffset( document, offset );
+	if( found === undefined ) return null;
+
+	const definition = found.checked.result.symbols.definitionOf( found.symbol );
+	const definitionPath = canonicalFsPath( definition.source );
+
+	const locations: Location[] = [];
+	const seen = new Set<string>();
+	const add = ( location: Location | undefined ): void => {
+		if( location === undefined ) return;
+		const key = `${location.uri}:${location.range.start.line}:${location.range.start.character}`;
+		if( seen.has( key ) ) return;
+		seen.add( key );
+		locations.push( location );
+	};
+
+	if( includeDeclaration ) {
+		add( compilerRangeToLocation( definition.source, definition.nameRange.start, definition.nameRange.end ) );
+	}
+
+	const checks: CheckedDocument[] = [ found.checked ];
+	const project = await projectCheckOf( found.checked.root );
+	if( project !== undefined && project !== found.checked && project.files.has( definitionPath ) ) {
+		checks.push( project );
+	}
+
+	for( const checked of checks ) {
+		const file = checked.files.get( definitionPath );
+		if( file === undefined ) continue;
+
+		// the same declaration in this check's index
+		const declared = checked.result.symbols.symbolAt( file, definition.nameRange.start );
+		if( declared === undefined ) continue;
+
+		for( const reference of checked.result.symbols.references( checked.result.symbols.definitionOf( declared ) ) ) {
+			add( compilerRangeToLocation(
+				reference.range.source.absoluteProjPath,
+				reference.range.start,
+				reference.range.end
+			) );
+		}
+	}
+	return locations;
+}
+
+/**
+ * The type of the member `name` of the innermost enclosing type at `offset` (`p.x` → the
+ * `x` field of `Point`): a field's own declaration carries no type, and the entry at a
+ * member access is the enclosing expression.
+ */
+function memberTypeAtOffset( checked: CheckedDocument, documentUri: string, offset: number, name: string ): TypeEntry['type'] | undefined {
+	const file = compilerFileOf( checked, fileURLToPath( documentUri ) );
+	if( file === undefined ) return undefined;
+
+	const enclosing = checked.result.sourceTypeMap.entriesOf( file )
+		.filter( entry => entry.start <= offset && offset <= entry.end )
+		.sort( ( a, b ) => ( a.end - a.start ) - ( b.end - b.start ) );
+
+	for( const entry of enclosing ) {
+		const member = checked.result.sourceTypeMap.membersOfType( entry.type ).find( m => m.name === name );
+		if( member !== undefined ) return member.type;
+	}
+	return undefined;
+}
+
+/** the kinds whose declaration may have a type entry starting at their name */
+const TYPES_FROM_DECLARATION_ENTRY = new Set<PebbleSymbolKind>([
+	'parameter', 'constant', 'variable', 'contractParam', 'enumMember',
+]);
+
+/** hover text for the symbol at `offset`: its kind and type, where an import leads */
+function hoverAtOffset( document: TextDocument, offset: number ): Hover | null {
+	const found = symbolAtOffset( document, offset );
+	if( found === undefined ) return null;
+
+	const { symbols } = found.checked.result;
+	const symbol = found.symbol;
+	const definition = symbols.definitionOf( symbol );
+	// a field's declaration carries no type of its own: take it from the member of the
+	// type the access is on
+	let type = definition.type ?? symbol.type;
+	if( type === undefined && ( definition.kind === 'field' || definition.kind === 'method' || definition.kind === 'enumMember' ) ) {
+		type = memberTypeAtOffset( found.checked, document.uri, offset, definition.name );
+	}
+	// some declarations carry no type of their own but have an entry starting at their
+	// name (`const x = …`, a contract parameter)
+	if( type === undefined && TYPES_FROM_DECLARATION_ENTRY.has( definition.kind ) ) {
+		const entry = typeEntryAtDocumentOffset( found.checked, document.uri, definition.nameRange.start );
+		if( entry !== undefined && entry.start === definition.nameRange.start ) type = entry.type;
+	}
+
+	let code = `${definition.kind} ${definition.name}`;
+	if( type !== undefined ) code += `: ${type.toString()}`;
+
+	if( definition !== symbol ) {
+		code += `\n// imported from ${displayPath( found.checked.root, definition.source )}`;
+	} else if( symbol.container !== undefined && ( symbol.kind === 'field' || symbol.kind === 'method' ) ) {
+		code += `\n// member of ${symbol.container.kind} ${symbol.container.name}`;
+	}
+
+	const range = compilerRangeToRange( found.file, symbol.nameRange.start, symbol.nameRange.end );
+	return {
+		contents: { kind: 'markdown', value: '```pebble\n' + code + '\n```' },
+		...(range !== undefined ? { range } : {}),
+	};
+}
+
+/** a completion item kind for each kind of symbol the compiler indexes */
+const COMPLETION_KIND_BY_SYMBOL: Record<PebbleSymbolKind, CompletionItemKind> = {
+	function: CompletionItemKind.Function,
+	parameter: CompletionItemKind.Variable,
+	constant: CompletionItemKind.Constant,
+	variable: CompletionItemKind.Variable,
+	struct: CompletionItemKind.Struct,
+	constructor: CompletionItemKind.Constructor,
+	field: CompletionItemKind.Field,
+	method: CompletionItemKind.Method,
+	type: CompletionItemKind.TypeParameter,
+	typeParameter: CompletionItemKind.TypeParameter,
+	enum: CompletionItemKind.Enum,
+	enumMember: CompletionItemKind.EnumMember,
+	interface: CompletionItemKind.Interface,
+	namespace: CompletionItemKind.Module,
+	contract: CompletionItemKind.Class,
+	contractParam: CompletionItemKind.Property,
+	contractMethod: CompletionItemKind.Method,
+	test: CompletionItemKind.Function,
+	import: CompletionItemKind.Reference,
+};
+
+/** the names visible at `offset`, innermost first, as completion items */
+function visibleSymbolCompletions( document: TextDocument, offset: number ): CompletionItem[] | null {
+	const found = checkOf( document );
+	if( found === undefined ) return null;
+
+	const items: CompletionItem[] = [];
+	const seen = new Set<string>();
+	for( const symbol of found.checked.result.symbols.visibleAt( found.file, offset ) ) {
+		if( seen.has( symbol.name ) ) continue;
+		seen.add( symbol.name );
+
+		// an import stands for what it names: complete the name with that declaration's kind
+		const target = symbol.kind === 'import' && symbol.target !== undefined ? symbol.target : symbol;
+		const type = target.type ?? symbol.type;
+		items.push({
+			label: symbol.name,
+			kind: COMPLETION_KIND_BY_SYMBOL[target.kind] ?? CompletionItemKind.Text,
+			...(type !== undefined ? { detail: type.toString() } : {}),
+		});
+	}
+	return items;
+}
+
+/** the type entry at `offset` of the document (the type map knows the file of each entry) */
+function typeEntryAtDocumentOffset( checked: CheckedDocument, documentUri: string, offset: number ): TypeEntry | undefined {
+	const file = compilerFileOf( checked, fileURLToPath( documentUri ) );
+	if( file === undefined ) return undefined;
+	return checked.result.sourceTypeMap.typeAt( file, offset );
+}
+
+/** the members of the type of the expression at `offset` of the document (`p.` → `p`'s fields) */
+function compilerMemberCompletions( checked: CheckedDocument, documentUri: string, offset: number ): CompletionItem[] {
+	const file = compilerFileOf( checked, fileURLToPath( documentUri ) );
+	if( file === undefined ) return [];
+
+	const entry = checked.result.sourceTypeMap.typeAt( file, offset );
+	if( entry === undefined ) return [];
+
+	return checked.result.sourceTypeMap.membersOfType( entry.type ).map( member => ({
+		label: member.name,
+		kind: member.kind === 'field' ? CompletionItemKind.Field : CompletionItemKind.Method,
+		detail: member.type.toString(),
+	}));
 }
 
 // Helper functions for document highlighting
@@ -1420,7 +1780,27 @@ connection.languages.diagnostics.on(async (params) => {
 documents.onDidChangeContent(async (change) => {
 	const diagnostics = await validateTextDocument(change.document);
 	connection.sendDiagnostics({ uri: change.document.uri, diagnostics });
+	await refreshDocumentsImporting(change.document);
 });
+
+/**
+ * Re-checks the open documents whose cached check compiled `changed` (an imported file was
+ * edited): their diagnostics, types and symbols were computed against the old text.
+ */
+async function refreshDocumentsImporting( changed: TextDocument ): Promise<void> {
+	const changedPath = canonicalFsPath( fileURLToPath( changed.uri ) );
+	// the project's own check compiled this file too: it is stale now
+	projectCheckCache.clear();
+
+	for( const other of documents.all() ) {
+		if( other.uri === changed.uri ) continue;
+		const checked = checkResultCache.get( other.uri );
+		if( checked === undefined || !checked.files.has( changedPath ) ) continue;
+
+		const diagnostics = await validateTextDocument( other );
+		connection.sendDiagnostics({ uri: other.uri, diagnostics });
+	}
+}
 
 function pebbleCategoryToSeverity(category: number): DiagnosticSeverity {
 	switch (category) {
@@ -1438,16 +1818,18 @@ async function validateTextDocument(textDocument: TextDocument): Promise<Diagnos
 
 	// --- Run the full compiler frontend for type-checking diagnostics ---
 	try {
-		const io = createLspCompilerIoApi( documentPath, documentText );
-		// `@harmoniclabs/pebble@0.2.0+` requires a CompilerOptions on the
-		// constructor; `compilerVersion` is mandatory and policed at runtime.
-		const compiler = new Compiler( io, { ...defaultOptions, compilerVersion: COMPILER_VERSION } );
-		const result = await compiler.check({ entry: documentPath, root: path.dirname( documentPath ) + '/' });
-		// cache for hover / completion
-		checkResultCache.set( textDocument.uri, result );
+		// the root is the project's: its `pebble.config.json` directory when it has one,
+		// so imports resolve the way the compiler resolves them for the project
+		const root = findProjectRoot( documentPath );
+		const checked = await runCheck( documentPath, documentText, root );
 
-		const compilerDiags: Diagnostic[] = result.diagnostics
-			.filter(d => d.range)
+		// cache for hover / completion / definitions / references
+		checkResultCache.set( textDocument.uri, checked );
+
+		// `check()` answers for every file it compiled: keep the diagnostics of this one
+		// (a range in another file's offsets would be read against this document's text)
+		const compilerDiags: Diagnostic[] = checked.result.diagnostics
+			.filter(d => d.range !== undefined && canonicalFsPath( d.range.source.absoluteProjPath ) === canonicalFsPath( documentPath ))
 			.map(d => ({
 				range: Range.create(textDocument.positionAt(d.range!.start), textDocument.positionAt(d.range!.end)),
 				severity: pebbleCategoryToSeverity(d.category),
@@ -1456,7 +1838,9 @@ async function validateTextDocument(textDocument: TextDocument): Promise<Diagnos
 				message: d.message,
 			}));
 
-		if( compilerDiags.length > 0 ) return compilerDiags;
+		// `check()` reports parse errors too, and goes past them: there is nothing the
+		// parser-only pass below would add
+		return compilerDiags;
 	} catch (error) {
 		console.error('Error in compiler check:', error);
 	}
@@ -1515,17 +1899,8 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
 			// Try compiler type map first
 			const cached = checkResultCache.get(params.textDocument.uri);
 			if (cached && nodeBeforeDot) {
-				const objEntry = cached.sourceTypeMap.typeAtOffset(nodeBeforeDot.startIndex);
-				if (objEntry) {
-					const members = cached.sourceTypeMap.membersOfType(objEntry.type);
-					if (members.length > 0) {
-						return members.map(m => ({
-							label: m.name,
-							kind: m.kind === 'field' ? CompletionItemKind.Field : CompletionItemKind.Method,
-							detail: m.type.toString(),
-						}));
-					}
-				}
+				const members = compilerMemberCompletions(cached, params.textDocument.uri, nodeBeforeDot.startIndex);
+				if (members.length > 0) return members;
 			}
 
 			// Fallback: tree-sitter heuristic dot-completion
@@ -1550,17 +1925,8 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
 				const cached = checkResultCache.get(params.textDocument.uri);
 				const objChild = parent.childForFieldName('object');
 				if (cached && objChild) {
-					const objEntry = cached.sourceTypeMap.typeAtOffset(objChild.startIndex);
-					if (objEntry) {
-						const members = cached.sourceTypeMap.membersOfType(objEntry.type);
-						if (members.length > 0) {
-							return members.map(m => ({
-								label: m.name,
-								kind: m.kind === 'field' ? CompletionItemKind.Field : CompletionItemKind.Method,
-								detail: m.type.toString(),
-							}));
-						}
-					}
+					const members = compilerMemberCompletions(cached, params.textDocument.uri, objChild.startIndex);
+					if (members.length > 0) return members;
 				}
 				// Fallback
 				if (objChild) {
@@ -1576,6 +1942,17 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
 
 		const items: CompletionItem[] = [];
 		const seen = new Set<string>();
+
+		// Add the names the compiler says are visible here (`SymbolIndex.visibleAt`):
+		// resolved through scopes, imports and shadowing
+		const visible = visibleSymbolCompletions(document, offset);
+		if (visible) {
+			for (const item of visible) {
+				if (seen.has(item.label) || PEBBLE_KEYWORDS.has(item.label)) continue;
+				seen.add(item.label);
+				items.push(item);
+			}
+		}
 
 		// Add symbols declared in this file
 		const symbols: SymbolInfo[] = [];
@@ -1687,6 +2064,13 @@ connection.onHover((params: HoverParams): Hover | null => {
 		const position = params.position;
 		const offset = document.offsetAt(position);
 
+		// The compiler's symbol index first: the symbol's kind and type, through imports.
+		// It needs no syntax tree, so it answers even where tree-sitter fails to parse
+		{
+			const symbolHover = hoverAtOffset(document, offset);
+			if (symbolHover) return symbolHover;
+		}
+
 		// Find the node at the cursor position
 		const nodeAtPosition = findNodeAtPosition(tree.rootNode, offset);
 		if (!nodeAtPosition) return null;
@@ -1718,6 +2102,12 @@ connection.onHover((params: HoverParams): Hover | null => {
 			}
 		}
 
+		// The compiler's symbol index: the symbol's kind and type, through imports
+		{
+			const symbolHover = hoverAtOffset(document, offset);
+			if (symbolHover) return symbolHover;
+		}
+
 		// Try compiler type info — only for identifier-like nodes (skip keywords, punctuation, etc.)
 		const cached = checkResultCache.get(params.textDocument.uri);
 		const isIdentifierLike = nodeAtPosition.type === 'identifier'
@@ -1727,7 +2117,9 @@ connection.onHover((params: HoverParams): Hover | null => {
 			|| nodeAtPosition.type === 'shorthand_property_identifier_pattern';
 		const identText = isIdentifierLike ? text.slice(nodeAtPosition.startIndex, nodeAtPosition.endIndex) : '';
 		if (cached && isIdentifierLike && !PEBBLE_KEYWORDS.has(identText)) {
-			const entry = cached.sourceTypeMap.typeAtOffset(offset);
+			// `typeAt` and not `typeAtOffset`: the type map knows the file of each entry, and
+			// this document is not necessarily the check's entry
+			const entry = typeEntryAtDocumentOffset(cached, params.textDocument.uri, offset);
 			if (entry) {
 				const typeName = entry.type.toString();
 				const identName = entry.name ?? getIdentifierName(nodeAtPosition, text);
@@ -1743,33 +2135,26 @@ connection.onHover((params: HoverParams): Hover | null => {
 				);
 				return { contents: { kind: 'markdown', value: hoverText }, range };
 			}
-			// SourceTypeMap is authoritative for identifiers — don't fall through to tree-sitter
-			return null;
 		}
 
 		// Keywords should never show hover info
 		if (isIdentifierLike && PEBBLE_KEYWORDS.has(identText)) return null;
 
-		// Fallback: tree-sitter based hover (only when no compiler data available)
-		if (!cached) {
-			const hoverInfo = generateHoverInfo(nodeAtPosition, text, tree.rootNode, params.textDocument.uri);
-			if (!hoverInfo) return null;
+		// Fallback: tree-sitter based hover, for what the compiler has no answer for
+		// (a file it could not parse, a node it does not index)
+		const hoverInfo = generateHoverInfo(nodeAtPosition, text, tree.rootNode, params.textDocument.uri);
+		if (!hoverInfo) return null;
 
-			const range = Range.create(
+		return {
+			contents: {
+				kind: 'markdown',
+				value: hoverInfo
+			},
+			range: Range.create(
 				document.positionAt(nodeAtPosition.startIndex),
 				document.positionAt(nodeAtPosition.endIndex)
-			);
-
-			return {
-				contents: {
-					kind: 'markdown',
-					value: hoverInfo
-				},
-				range
-			};
-		}
-
-		return null;
+			)
+		};
 	} catch (error) {
 		console.error('Error in onHover:', error);
 		return null;
@@ -1784,6 +2169,12 @@ connection.onDefinition((params: DefinitionParams): Definition | null => {
 		const text = document.getText();
 		const tree = parser.parse(text);
 		const offset = document.offsetAt(params.position);
+
+		// The compiler's symbol index first: it resolves the name at this offset (through
+		// scopes and imports) and knows the file and the range of its declaration. It needs
+		// no syntax tree, so it answers even where tree-sitter fails to parse
+		const fromIndex = definitionAtOffset(document, offset);
+		if (fromIndex) return fromIndex;
 
 		// Find the node at the cursor position
 		const nodeAtPosition = findNodeAtPosition(tree.rootNode, offset);
@@ -1835,7 +2226,7 @@ connection.onDefinition((params: DefinitionParams): Definition | null => {
 
 // ── Find All References ─────────────────────────────────────────────
 
-connection.onReferences((params: ReferenceParams): Location[] => {
+connection.onReferences(async (params: ReferenceParams): Promise<Location[]> => {
 	try {
 		const document = documents.get(params.textDocument.uri);
 		if (!document) return [];
@@ -1843,6 +2234,11 @@ connection.onReferences((params: ReferenceParams): Location[] => {
 		const text = document.getText();
 		const tree = parser.parse(text);
 		const offset = document.offsetAt(params.position);
+
+		// The compiler's symbol index first: every use of what the name at this offset
+		// names, in every file the check compiled
+		const fromIndex = await referencesAtOffset(document, offset, params.context.includeDeclaration);
+		if (fromIndex !== null) return fromIndex;
 
 		const nodeAtPosition = findNodeAtPosition(tree.rootNode, offset);
 		if (!nodeAtPosition) return [];
@@ -2314,8 +2710,14 @@ connection.languages.semanticTokens.on((params: SemanticTokensParams) => {
 	const funcNames = new Set<string>();
 	collectConstNames(tree.rootNode);
 	const cached = checkResultCache.get(params.textDocument.uri);
+	// the entries of *this* file: the type map holds the entries of every file the check
+	// compiled, and their offsets say nothing about one another
+	const checkedFile = cached !== undefined ? compilerFileOf(cached, fileURLToPath(document.uri)) : undefined;
+	const checkedEntries = cached !== undefined && checkedFile !== undefined
+		? cached.result.sourceTypeMap.entriesOf(checkedFile)
+		: [];
 	if (cached) {
-		for (const entry of cached.sourceTypeMap.allEntries()) {
+		for (const entry of checkedEntries) {
 			if (!entry.name || entry.kind === 'type-reference') continue;
 			if (PEBBLE_KEYWORDS.has(entry.name) || /^[A-Z]/.test(entry.name) || PEBBLE_BUILTIN_TYPES.has(entry.name)) continue;
 			// function-type entries go to funcNames, others to constNames
@@ -2332,7 +2734,7 @@ connection.languages.semanticTokens.on((params: SemanticTokensParams) => {
 
 	// Pass 3: mark type references from compiler SourceTypeMap
 	if (cached) {
-		for (const entry of cached.sourceTypeMap.allEntries()) {
+		for (const entry of checkedEntries) {
 			if (entry.kind === 'type-reference') {
 				const startPos = document.positionAt(entry.start);
 				const length = entry.end - entry.start;

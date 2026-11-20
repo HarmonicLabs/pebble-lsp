@@ -6,7 +6,7 @@
 		"node": "*"
 	},
 	"dependencies": {
-		"@harmoniclabs/pebble": "^0.3.0",
+		"@harmoniclabs/pebble": "^0.6.0",
 		"@harmoniclabs/tree-sitter-pebble": "^0.3.0",
 		"@harmoniclabs/uint8array-utils": "^1.0.4",
 		"tree-sitter": "^0.25.0",
@@ -14,6 +14,7 @@
 		"vscode-languageserver-textdocument": "^1.0.11"
 	},
 	"scripts": {
-		"build": "tsc"
+		"build": "tsc",
+		"test": "node test/lsp.test.mjs"
 	}
 }
